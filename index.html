@@ -1,858 +1,1960 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RisingWave await-tree report</title>
-<style>
-:root{--bg:#0f1115;--panel:#181b22;--panel2:#1f232c;--bd:#2b303b;--tx:#e6e8ec;
---mut:#9aa3af;--accent:#6ea8fe;--amber:#e0a13c;--red:#e05a5a;--blue:#5aa0e0;
---teal:#3fb8a0;--purple:#9b8cf0;--gray:#6b7280;--green:#57b368;}
-*{box-sizing:border-box}
-html,body{height:100%}
-body{margin:0;background:var(--bg);color:var(--tx);
-font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
-.wrap{max-width:1080px;margin:0 auto;padding:24px 22px 90px;}
-h1{font-size:22px;font-weight:600;margin:0 0 4px;}
-h2{font-size:16px;font-weight:600;margin:34px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--bd);}
-.sub{color:var(--mut);font-size:13px;margin:0 0 18px;}
-a{color:var(--accent);text-decoration:none;}
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RisingWave await-tree report</title>
+    <style>
+      :root {
+        --bg: #0f1115;
+        --panel: #181b22;
+        --panel2: #1f232c;
+        --bd: #2b303b;
+        --tx: #e6e8ec;
+        --mut: #9aa3af;
+        --accent: #6ea8fe;
+        --amber: #e0a13c;
+        --red: #e05a5a;
+        --blue: #5aa0e0;
+        --teal: #3fb8a0;
+        --purple: #9b8cf0;
+        --gray: #6b7280;
+        --green: #57b368;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--tx);
+        font:
+          14px/1.55 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+      }
+      .wrap {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 24px 22px 90px;
+      }
+      h1 {
+        font-size: 22px;
+        font-weight: 600;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 16px;
+        font-weight: 600;
+        margin: 34px 0 12px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid var(--bd);
+      }
+      .sub {
+        color: var(--mut);
+        font-size: 13px;
+        margin: 0 0 18px;
+      }
+      a {
+        color: var(--accent);
+        text-decoration: none;
+      }
 
-/* ---- loader ---- */
-#loader{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}
-.drop{width:min(720px,92vw);border:1.5px dashed var(--bd);border-radius:16px;background:var(--panel);
-padding:48px 32px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s;}
-.drop.hot{border-color:var(--accent);background:#1b2230;}
-.drop .big{font-size:19px;font-weight:600;margin-bottom:8px;}
-.drop .hint{color:var(--mut);font-size:13.5px;line-height:1.7;}
-.drop kbd{background:var(--panel2);border:1px solid var(--bd);border-radius:5px;padding:1px 6px;font-size:12px;font-family:ui-monospace,monospace;}
-.drop .icon{font-size:40px;opacity:.5;margin-bottom:14px;}
-.err{color:var(--red);margin-top:14px;font-size:13px;}
+      /* ---- loader ---- */
+      #loader {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+      .drop {
+        width: min(720px, 92vw);
+        border: 1.5px dashed var(--bd);
+        border-radius: 16px;
+        background: var(--panel);
+        padding: 48px 32px;
+        text-align: center;
+        cursor: pointer;
+        transition:
+          border-color 0.15s,
+          background 0.15s;
+      }
+      .drop.hot {
+        border-color: var(--accent);
+        background: #1b2230;
+      }
+      .drop .big {
+        font-size: 19px;
+        font-weight: 600;
+        margin-bottom: 8px;
+      }
+      .drop .hint {
+        color: var(--mut);
+        font-size: 13.5px;
+        line-height: 1.7;
+      }
+      .drop kbd {
+        background: var(--panel2);
+        border: 1px solid var(--bd);
+        border-radius: 5px;
+        padding: 1px 6px;
+        font-size: 12px;
+        font-family: ui-monospace, monospace;
+      }
+      .drop .icon {
+        font-size: 40px;
+        opacity: 0.5;
+        margin-bottom: 14px;
+      }
+      .err {
+        color: var(--red);
+        margin-top: 14px;
+        font-size: 13px;
+      }
 
-/* ---- report ---- */
-#report{display:none;}
-.bar{position:sticky;top:0;z-index:5;background:rgba(15,17,21,.92);backdrop-filter:blur(6px);
-border-bottom:1px solid var(--bd);}
-.bar .inner{max-width:1080px;margin:0 auto;padding:12px 22px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;}
-.bar .fn{font-weight:600;}
-.bar .muted{color:var(--mut);font-size:12.5px;}
-.bar .spacer{flex:1;}
-.bar label{color:var(--mut);font-size:12.5px;display:flex;align-items:center;gap:5px;}
-.bar input[type=number]{width:64px;background:var(--panel);border:1px solid var(--bd);color:var(--tx);
-border-radius:6px;padding:4px 6px;font:inherit;}
-button{background:var(--panel);border:1px solid var(--bd);color:var(--tx);border-radius:8px;
-padding:6px 12px;font:inherit;cursor:pointer;}
-button:hover{background:var(--panel2);border-color:#3a4150;}
-.banner{background:#211d16;border:1px solid rgba(224,161,60,.4);color:var(--amber);
-border-radius:10px;padding:10px 14px;margin:14px 0;font-size:13px;}
+      /* ---- report ---- */
+      #report {
+        display: none;
+      }
+      .bar {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        background: rgba(15, 17, 21, 0.92);
+        backdrop-filter: blur(6px);
+        border-bottom: 1px solid var(--bd);
+      }
+      .bar .inner {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 12px 22px;
+        display: flex;
+        gap: 14px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .bar .fn {
+        font-weight: 600;
+      }
+      .bar .muted {
+        color: var(--mut);
+        font-size: 12.5px;
+      }
+      .bar .spacer {
+        flex: 1;
+      }
+      .bar label {
+        color: var(--mut);
+        font-size: 12.5px;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .bar input[type="number"] {
+        width: 64px;
+        background: var(--panel);
+        border: 1px solid var(--bd);
+        color: var(--tx);
+        border-radius: 6px;
+        padding: 4px 6px;
+        font: inherit;
+      }
+      button {
+        background: var(--panel);
+        border: 1px solid var(--bd);
+        color: var(--tx);
+        border-radius: 8px;
+        padding: 6px 12px;
+        font: inherit;
+        cursor: pointer;
+      }
+      button:hover {
+        background: var(--panel2);
+        border-color: #3a4150;
+      }
+      .banner {
+        background: #211d16;
+        border: 1px solid rgba(224, 161, 60, 0.4);
+        color: var(--amber);
+        border-radius: 10px;
+        padding: 10px 14px;
+        margin: 14px 0;
+        font-size: 13px;
+      }
 
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:16px 0;}
-.card{background:var(--panel);border:1px solid var(--bd);border-radius:10px;padding:14px 16px;}
-.card .k{color:var(--mut);font-size:12px;}
-.card .v{font-size:24px;font-weight:600;margin-top:4px;font-variant-numeric:tabular-nums;}
-table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--bd);
-border-radius:10px;overflow:hidden;font-variant-numeric:tabular-nums;}
-th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--bd);}
-th{color:var(--mut);font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.03em;}
-tr:last-child td{border-bottom:none}
-td.num,th.num{text-align:right;}
-.barcell{position:relative;background:var(--panel2);border-radius:5px;height:18px;min-width:40px;}
-.barcell>span{position:absolute;left:0;top:0;bottom:0;background:var(--accent);border-radius:5px;opacity:.55;}
-.barcell>em{position:relative;font-style:normal;padding:0 6px;line-height:18px;font-size:12px;}
-code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;}
-.badge{display:inline-block;padding:1px 8px;border-radius:20px;font-size:11.5px;border:1px solid var(--bd);}
-.b-amber{background:rgba(224,161,60,.16);border-color:rgba(224,161,60,.5);color:var(--amber);}
-.b-red{background:rgba(224,90,90,.16);border-color:rgba(224,90,90,.5);color:var(--red);}
-.b-blue{background:rgba(90,160,224,.16);border-color:rgba(90,160,224,.5);color:var(--blue);}
-.b-teal{background:rgba(63,184,160,.16);border-color:rgba(63,184,160,.5);color:var(--teal);}
-.b-purple{background:rgba(155,140,240,.16);border-color:rgba(155,140,240,.5);color:var(--purple);}
-.b-gray{background:rgba(107,114,128,.16);border-color:rgba(107,114,128,.5);color:var(--mut);}
-.chain{background:var(--panel);border:1px solid var(--bd);border-radius:10px;padding:12px 14px;margin:10px 0;}
-.chain .title{font-weight:600;margin-bottom:8px;}
-.chain .title .meta{color:var(--mut);font-weight:400;font-size:12.5px;margin-left:6px;}
-.hop{display:flex;align-items:center;gap:8px;padding:3px 0;}
-.hop .arm{color:var(--mut);font-family:ui-monospace,monospace;white-space:pre;}
-.hop .pn{font-family:ui-monospace,monospace;}
-.hop .w{color:var(--mut);font-size:12px;font-variant-numeric:tabular-nums;margin-left:auto;}
-.note{color:var(--mut);font-size:12.5px;margin-top:8px;}
-.pill{display:inline-block;padding:1px 7px;border-radius:6px;background:var(--panel2);color:var(--mut);font-size:12px;margin-right:4px;}
-#report:focus,#body:focus{outline:none;}
-details.info{margin:-6px 0 16px;border:1px solid var(--bd);border-radius:8px;background:var(--panel2);}
-details.info>summary{cursor:pointer;padding:7px 12px;color:var(--mut);font-size:12.5px;user-select:none;}
-details.info>summary:hover{color:var(--tx);}
-details.info .ibody{padding:2px 14px 12px;font-size:13px;line-height:1.65;color:var(--tx);}
-details.info .ibody b{font-weight:600;}
-details.info .ibody code{background:var(--panel);border:1px solid var(--bd);border-radius:4px;padding:0 4px;}
-.graphwrap{overflow-x:auto;border:1px solid var(--bd);border-radius:10px;background:var(--panel);padding:14px;margin:6px 0 4px;}
-#body svg text.nt{fill:var(--tx);}
-#body svg text.ns{fill:var(--mut);}
-#body svg text{user-select:none;}
-#body svg .gnode{cursor:grab;touch-action:none;}
-#body svg .gnode:active{cursor:grabbing;}
-.graphbar{display:flex;align-items:center;gap:10px;margin:4px 0 8px;}
-.graphbar label{color:var(--mut);font-size:12.5px;display:flex;align-items:center;gap:6px;}
-.graphbar select{background:var(--panel);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:4px 8px;font:inherit;}
-.graphbar button{padding:4px 10px;}
-.glegend{display:flex;gap:14px;flex-wrap:wrap;color:var(--mut);font-size:12px;margin:8px 2px 0;}
-.glegend i{font-style:normal;display:inline-flex;align-items:center;gap:5px;}
-.glegend .sw{width:11px;height:11px;border-radius:3px;display:inline-block;}
-button.more{width:100%;margin:10px 0 2px;color:var(--mut);background:var(--panel);border-style:dashed;}
-button.more:hover{color:var(--tx);border-color:#3a4150;background:var(--panel2);}
-#prog{width:min(720px,92vw);}
-#prog .pname{font-weight:600;margin-bottom:6px;word-break:break-all;}
-#prog .plabel{color:var(--mut);font-size:13px;}
-.pbar{height:10px;background:var(--panel2);border:1px solid var(--bd);border-radius:6px;overflow:hidden;margin-top:12px;}
-.pbar>span{display:block;height:100%;width:0;background:var(--accent);transition:width .1s ease;}
-th.th-sort{cursor:pointer;user-select:none;white-space:nowrap;}
-th.th-sort:hover{color:var(--tx);}
-tr.filtrow td{padding:6px 8px;background:var(--panel);border-bottom:1px solid var(--bd);}
-input.tfilter{width:100%;background:var(--panel2);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:4px 8px;font:inherit;font-size:12.5px;}
-input.tfilter:focus{outline:none;border-color:var(--accent);}
-.loadercol{width:min(720px,92vw);display:flex;flex-direction:column;gap:16px;}
-#metabar{border:1px solid var(--bd);border-radius:12px;background:var(--panel);padding:16px 18px;}
-#metabar>label{display:block;color:var(--mut);font-size:12.5px;margin-bottom:8px;}
-#metabar .metarow{display:flex;gap:8px;}
-#metabar input{flex:1;background:var(--panel2);border:1px solid var(--bd);color:var(--tx);border-radius:8px;padding:8px 10px;font:inherit;}
-#metabar input:focus{outline:none;border-color:var(--accent);}
-#metabar button{white-space:nowrap;padding:8px 14px;}
-#metabar .metahint{color:var(--mut);font-size:12px;line-height:1.6;margin-top:8px;}
-#metabar .metaerr{display:none;color:var(--bad,#ff6b6b);font-size:12.5px;line-height:1.55;margin-top:10px;}
-#metabar code{background:var(--panel2);border:1px solid var(--bd);border-radius:4px;padding:0 4px;}
-</style>
-</head>
-<body>
-
-<div id="loader">
- <div class="loadercol">
-  <div id="metabar">
-    <label for="metahost">RisingWave meta node</label>
-    <div class="metarow">
-      <input id="metahost" value="localhost:5691" spellcheck="false" autocapitalize="off" autocomplete="off">
-      <button id="metaload">Fetch await-tree</button>
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 12px;
+        margin: 16px 0;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--bd);
+        border-radius: 10px;
+        padding: 14px 16px;
+      }
+      .card .k {
+        color: var(--mut);
+        font-size: 12px;
+      }
+      .card .v {
+        font-size: 24px;
+        font-weight: 600;
+        margin-top: 4px;
+        font-variant-numeric: tabular-nums;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--panel);
+        border: 1px solid var(--bd);
+        border-radius: 10px;
+        overflow: hidden;
+        font-variant-numeric: tabular-nums;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--bd);
+      }
+      th {
+        color: var(--mut);
+        font-weight: 500;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+      tr:last-child td {
+        border-bottom: none;
+      }
+      td.num,
+      th.num {
+        text-align: right;
+      }
+      .barcell {
+        position: relative;
+        background: var(--panel2);
+        border-radius: 5px;
+        height: 18px;
+        min-width: 40px;
+      }
+      .barcell > span {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        background: var(--accent);
+        border-radius: 5px;
+        opacity: 0.55;
+      }
+      .barcell > em {
+        position: relative;
+        font-style: normal;
+        padding: 0 6px;
+        line-height: 18px;
+        font-size: 12px;
+      }
+      code,
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12.5px;
+      }
+      .badge {
+        display: inline-block;
+        padding: 1px 8px;
+        border-radius: 20px;
+        font-size: 11.5px;
+        border: 1px solid var(--bd);
+      }
+      .b-amber {
+        background: rgba(224, 161, 60, 0.16);
+        border-color: rgba(224, 161, 60, 0.5);
+        color: var(--amber);
+      }
+      .b-red {
+        background: rgba(224, 90, 90, 0.16);
+        border-color: rgba(224, 90, 90, 0.5);
+        color: var(--red);
+      }
+      .b-blue {
+        background: rgba(90, 160, 224, 0.16);
+        border-color: rgba(90, 160, 224, 0.5);
+        color: var(--blue);
+      }
+      .b-teal {
+        background: rgba(63, 184, 160, 0.16);
+        border-color: rgba(63, 184, 160, 0.5);
+        color: var(--teal);
+      }
+      .b-purple {
+        background: rgba(155, 140, 240, 0.16);
+        border-color: rgba(155, 140, 240, 0.5);
+        color: var(--purple);
+      }
+      .b-gray {
+        background: rgba(107, 114, 128, 0.16);
+        border-color: rgba(107, 114, 128, 0.5);
+        color: var(--mut);
+      }
+      .chain {
+        background: var(--panel);
+        border: 1px solid var(--bd);
+        border-radius: 10px;
+        padding: 12px 14px;
+        margin: 10px 0;
+      }
+      .chain .title {
+        font-weight: 600;
+        margin-bottom: 8px;
+      }
+      .chain .title .meta {
+        color: var(--mut);
+        font-weight: 400;
+        font-size: 12.5px;
+        margin-left: 6px;
+      }
+      .hop {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 3px 0;
+      }
+      .hop .arm {
+        color: var(--mut);
+        font-family: ui-monospace, monospace;
+        white-space: pre;
+      }
+      .hop .pn {
+        font-family: ui-monospace, monospace;
+      }
+      .hop .w {
+        color: var(--mut);
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+        margin-left: auto;
+      }
+      .note {
+        color: var(--mut);
+        font-size: 12.5px;
+        margin-top: 8px;
+      }
+      .pill {
+        display: inline-block;
+        padding: 1px 7px;
+        border-radius: 6px;
+        background: var(--panel2);
+        color: var(--mut);
+        font-size: 12px;
+        margin-right: 4px;
+      }
+      #report:focus,
+      #body:focus {
+        outline: none;
+      }
+      details.info {
+        margin: -6px 0 16px;
+        border: 1px solid var(--bd);
+        border-radius: 8px;
+        background: var(--panel2);
+      }
+      details.info > summary {
+        cursor: pointer;
+        padding: 7px 12px;
+        color: var(--mut);
+        font-size: 12.5px;
+        user-select: none;
+      }
+      details.info > summary:hover {
+        color: var(--tx);
+      }
+      details.info .ibody {
+        padding: 2px 14px 12px;
+        font-size: 13px;
+        line-height: 1.65;
+        color: var(--tx);
+      }
+      details.info .ibody b {
+        font-weight: 600;
+      }
+      details.info .ibody code {
+        background: var(--panel);
+        border: 1px solid var(--bd);
+        border-radius: 4px;
+        padding: 0 4px;
+      }
+      .graphwrap {
+        overflow-x: auto;
+        border: 1px solid var(--bd);
+        border-radius: 10px;
+        background: var(--panel);
+        padding: 14px;
+        margin: 6px 0 4px;
+      }
+      #body svg text.nt {
+        fill: var(--tx);
+      }
+      #body svg text.ns {
+        fill: var(--mut);
+      }
+      #body svg text {
+        user-select: none;
+      }
+      #body svg .gnode {
+        cursor: grab;
+        touch-action: none;
+      }
+      #body svg .gnode:active {
+        cursor: grabbing;
+      }
+      .graphbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 4px 0 8px;
+      }
+      .graphbar label {
+        color: var(--mut);
+        font-size: 12.5px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .graphbar select {
+        background: var(--panel);
+        border: 1px solid var(--bd);
+        color: var(--tx);
+        border-radius: 6px;
+        padding: 4px 8px;
+        font: inherit;
+      }
+      .graphbar button {
+        padding: 4px 10px;
+      }
+      .glegend {
+        display: flex;
+        gap: 14px;
+        flex-wrap: wrap;
+        color: var(--mut);
+        font-size: 12px;
+        margin: 8px 2px 0;
+      }
+      .glegend i {
+        font-style: normal;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .glegend .sw {
+        width: 11px;
+        height: 11px;
+        border-radius: 3px;
+        display: inline-block;
+      }
+      button.more {
+        width: 100%;
+        margin: 10px 0 2px;
+        color: var(--mut);
+        background: var(--panel);
+        border-style: dashed;
+      }
+      button.more:hover {
+        color: var(--tx);
+        border-color: #3a4150;
+        background: var(--panel2);
+      }
+      #prog {
+        width: min(720px, 92vw);
+      }
+      #prog .pname {
+        font-weight: 600;
+        margin-bottom: 6px;
+        word-break: break-all;
+      }
+      #prog .plabel {
+        color: var(--mut);
+        font-size: 13px;
+      }
+      .pbar {
+        height: 10px;
+        background: var(--panel2);
+        border: 1px solid var(--bd);
+        border-radius: 6px;
+        overflow: hidden;
+        margin-top: 12px;
+      }
+      .pbar > span {
+        display: block;
+        height: 100%;
+        width: 0;
+        background: var(--accent);
+        transition: width 0.1s ease;
+      }
+      th.th-sort {
+        cursor: pointer;
+        user-select: none;
+        white-space: nowrap;
+      }
+      th.th-sort:hover {
+        color: var(--tx);
+      }
+      tr.filtrow td {
+        padding: 6px 8px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--bd);
+      }
+      input.tfilter {
+        width: 100%;
+        background: var(--panel2);
+        border: 1px solid var(--bd);
+        color: var(--tx);
+        border-radius: 6px;
+        padding: 4px 8px;
+        font: inherit;
+        font-size: 12.5px;
+      }
+      input.tfilter:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+      .loadercol {
+        width: min(720px, 92vw);
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      #metabar {
+        border: 1px solid var(--bd);
+        border-radius: 12px;
+        background: var(--panel);
+        padding: 16px 18px;
+      }
+      #metabar > label {
+        display: block;
+        color: var(--mut);
+        font-size: 12.5px;
+        margin-bottom: 8px;
+      }
+      #metabar .metarow {
+        display: flex;
+        gap: 8px;
+      }
+      #metabar input {
+        flex: 1;
+        background: var(--panel2);
+        border: 1px solid var(--bd);
+        color: var(--tx);
+        border-radius: 8px;
+        padding: 8px 10px;
+        font: inherit;
+      }
+      #metabar input:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+      #metabar button {
+        white-space: nowrap;
+        padding: 8px 14px;
+      }
+      #metabar .metahint {
+        color: var(--mut);
+        font-size: 12px;
+        line-height: 1.6;
+        margin-top: 8px;
+      }
+      #metabar .metaerr {
+        display: none;
+        color: var(--bad, #ff6b6b);
+        font-size: 12.5px;
+        line-height: 1.55;
+        margin-top: 10px;
+      }
+      #metabar code {
+        background: var(--panel2);
+        border: 1px solid var(--bd);
+        border-radius: 4px;
+        padding: 0 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="loader">
+      <div class="loadercol">
+        <div id="metabar">
+          <label for="metahost">RisingWave meta node</label>
+          <div class="metarow">
+            <input id="metahost" value="localhost:5691" spellcheck="false" autocapitalize="off" autocomplete="off" />
+            <button id="metaload">Fetch await-tree</button>
+          </div>
+          <div class="metahint">
+            GET <code>/api/monitor/await_tree/</code> from the meta node (same call the RW dashboard makes). Needs
+            network access to the meta node; a browser may block it via CORS — paste the dump if so.
+          </div>
+          <div class="metaerr" id="metaerr"></div>
+        </div>
+        <div class="drop" id="drop" tabindex="0" role="button" aria-label="Load an await-tree dump">
+          <div class="icon">⬇</div>
+          <div class="big">Drop a RisingWave await-tree dump here</div>
+          <div class="hint">
+            or <strong>paste</strong> it with <kbd>⌘/Ctrl</kbd>+<kbd>V</kbd> (a file or the raw text), or
+            <strong>click</strong> to choose a file.<br />
+            Everything runs locally in your browser — nothing is uploaded.
+          </div>
+          <div class="err" id="err"></div>
+        </div>
+        <input type="file" id="file" hidden />
+        <div id="prog" hidden>
+          <div class="pname" id="pname"></div>
+          <div class="plabel" id="plabel">Reading…</div>
+          <div class="pbar"><span id="pfill"></span></div>
+        </div>
+      </div>
     </div>
-    <div class="metahint">GET <code>/api/monitor/await_tree/</code> from the meta node (same call the RW dashboard makes). Needs network access to the meta node; a browser may block it via CORS — paste the dump if so.</div>
-    <div class="metaerr" id="metaerr"></div>
-  </div>
-  <div class="drop" id="drop" tabindex="0" role="button" aria-label="Load an await-tree dump">
-    <div class="icon">⬇</div>
-    <div class="big">Drop a RisingWave await-tree dump here</div>
-    <div class="hint">
-      or <strong>paste</strong> it with <kbd>⌘/Ctrl</kbd>+<kbd>V</kbd> (a file or the raw text),
-      or <strong>click</strong> to choose a file.<br>
-      Everything runs locally in your browser — nothing is uploaded.
+
+    <div id="report">
+      <div class="bar">
+        <div class="inner">
+          <span class="fn" id="fn"></span>
+          <span class="muted" id="summary"></span>
+          <span class="spacer"></span>
+          <button id="dljson">Download JSON</button>
+          <button id="another">Load another</button>
+        </div>
+      </div>
+      <div class="wrap" id="body"></div>
     </div>
-    <div class="err" id="err"></div>
-  </div>
-  <input type="file" id="file" hidden>
-  <div id="prog" hidden>
-    <div class="pname" id="pname"></div>
-    <div class="plabel" id="plabel">Reading…</div>
-    <div class="pbar"><span id="pfill"></span></div>
-  </div>
- </div>
-</div>
 
-<div id="report">
-  <div class="bar">
-    <div class="inner">
-      <span class="fn" id="fn"></span>
-      <span class="muted" id="summary"></span>
-      <span class="spacer"></span>
-      <button id="dljson">Download JSON</button>
-      <button id="another">Load another</button>
-    </div>
-  </div>
-  <div class="wrap" id="body"></div>
-</div>
+    <script>
+      "use strict";
+      // ===================================================================== //
+      // Parsing (ported 1:1 from await_tree_report.py)                         //
+      // ===================================================================== //
+      const DURATION_RE = /\[([0-9.]+)(ns|us|µs|ms|s|m)\]\s*$/;
+      const ACTOR_HEADER = /^Actor (\d+): `([^`]*)`/;
+      const ACTOR_PROBE = /Actor \d+: `/;
+      const JVM_THREAD = /^"([^"]+)" .*Id=(\d+)\s+([A-Z_]+)/;
+      const INPUT_EDGE = /(?:Remote|Local)Input \(actor (\d+)\)/;
+      const SEC = { ns: 1e-9, us: 1e-6, µs: 1e-6, ms: 1e-3, s: 1, m: 60 };
+      const BUCKET_EDGES = [0, 0.5, 1, 2, 5, 10, 30, 60, Infinity];
+      const CAT_COLOUR = {
+        Source: "amber",
+        wait_pending_fetch_block: "red",
+        receive_barrier: "blue",
+        "Wait For New Buffer Item": "teal",
+        UpstreamSinkUnion: "purple",
+        input: "gray",
+        DynamicFilter: "gray",
+        Now: "gray",
+      };
 
-<script>
-"use strict";
-// ===================================================================== //
-// Parsing (ported 1:1 from await_tree_report.py)                         //
-// ===================================================================== //
-const DURATION_RE   = /\[([0-9.]+)(ns|us|µs|ms|s|m)\]\s*$/;
-const ACTOR_HEADER  = /^Actor (\d+): `([^`]*)`/;
-const ACTOR_PROBE   = /Actor \d+: `/;
-const JVM_THREAD    = /^"([^"]+)" .*Id=(\d+)\s+([A-Z_]+)/;
-const INPUT_EDGE    = /(?:Remote|Local)Input \(actor (\d+)\)/;
-const SEC = {ns:1e-9, us:1e-6, "µs":1e-6, ms:1e-3, s:1, m:60};
-const BUCKET_EDGES = [0,0.5,1,2,5,10,30,60,Infinity];
-const CAT_COLOUR = {Source:"amber", wait_pending_fetch_block:"red", receive_barrier:"blue",
-  "Wait For New Buffer Item":"teal", UpstreamSinkUnion:"purple", input:"gray", DynamicFilter:"gray", Now:"gray"};
+      const tick = () => new Promise((r) => setTimeout(r, 0)); // yield to the event loop (keeps progress bar live)
+      const STUCK_S = 5; // fixed, non-configurable: an actor waiting >=5s is stuck for any sane barrier interval
+      function parseDuration(v, u) {
+        return parseFloat(v) * SEC[u];
+      }
 
-const tick=()=>new Promise(r=>setTimeout(r,0));   // yield to the event loop (keeps progress bar live)
-const STUCK_S=5;   // fixed, non-configurable: an actor waiting >=5s is stuck for any sane barrier interval
-function parseDuration(v,u){ return parseFloat(v)*SEC[u]; }
+      function normaliseLabel(label) {
+        label = label.replace(DURATION_RE, "").trim();
+        label = label.replace(/\b[0-9A-F]{8,}\b/g, "");
+        label = label.replace(/\(actor \d+\)/g, "(actor N)");
+        label = label.replace(/\bactor \d+\b/g, "actor N");
+        label = label.replace(/\d{6,}/g, "N");
+        return label.replace(/\s+/g, " ").trim();
+      }
+      function normaliseCategory(label) {
+        return label.startsWith("RemoteInput") || label.startsWith("LocalInput") ? "input" : label;
+      }
+      function arrMax(a) {
+        let m = -Infinity;
+        for (const v of a) if (v > m) m = v;
+        return m === -Infinity ? 0 : m;
+      }
+      function leadingWs(line) {
+        return line.length - line.replace(/^\s+/, "").length;
+      }
 
-function normaliseLabel(label){
-  label = label.replace(DURATION_RE,"").trim();
-  label = label.replace(/\b[0-9A-F]{8,}\b/g,"");
-  label = label.replace(/\(actor \d+\)/g,"(actor N)");
-  label = label.replace(/\bactor \d+\b/g,"actor N");
-  label = label.replace(/\d{6,}/g,"N");
-  return label.replace(/\s+/g," ").trim();
-}
-function normaliseCategory(label){
-  return (label.startsWith("RemoteInput")||label.startsWith("LocalInput")) ? "input" : label;
-}
-function arrMax(a){ let m=-Infinity; for(const v of a) if(v>m) m=v; return m===-Infinity?0:m; }
-function leadingWs(line){ return line.length - line.replace(/^\s+/,"").length; }
+      function stripUniformPrefix(lines) {
+        if (lines.some((l) => ACTOR_HEADER.test(l))) return { lines, prefix: 0 };
+        let col = null;
+        for (const l of lines) {
+          const m = l.match(ACTOR_PROBE);
+          if (m) {
+            col = m.index;
+            break;
+          }
+        }
+        if (!col) return { lines, prefix: 0 };
+        const stripped = lines.map((l) => l.slice(col));
+        if (stripped.some((l) => ACTOR_HEADER.test(l))) return { lines: stripped, prefix: col };
+        return { lines, prefix: 0 };
+      }
+      function splitSections(lines) {
+        for (let i = 0; i < lines.length; i++) {
+          if (JVM_THREAD.test(lines[i])) return { tree: lines.slice(0, i), jvm: lines.slice(i) };
+        }
+        return { tree: lines, jvm: [] };
+      }
 
-function stripUniformPrefix(lines){
-  if (lines.some(l=>ACTOR_HEADER.test(l))) return {lines, prefix:0};
-  let col=null;
-  for (const l of lines){ const m=l.match(ACTOR_PROBE); if(m){ col=m.index; break; } }
-  if (!col) return {lines, prefix:0};
-  const stripped = lines.map(l=>l.slice(col));
-  if (stripped.some(l=>ACTOR_HEADER.test(l))) return {lines:stripped, prefix:col};
-  return {lines, prefix:0};
-}
-function splitSections(lines){
-  for (let i=0;i<lines.length;i++){ if (JVM_THREAD.test(lines[i])) return {tree:lines.slice(0,i), jvm:lines.slice(i)}; }
-  return {tree:lines, jvm:[]};
-}
+      // Parses the WHOLE tree section — every line, every actor. Chunked + async only so a
+      // progress bar can update on huge files; nothing is skipped or sampled.
+      async function parseActors(treeLines, onProg) {
+        const actors = [];
+        let cur = null;
+        const N = treeLines.length;
+        for (let i = 0; i < N; i++) {
+          const line = treeLines[i];
+          if (line && line.trim()) {
+            if (line.startsWith("[")) {
+              // section header: [Actor N], [Global Barrier Worker], [RPC ...] ...
+              cur = null; // stop attaching lines to the previous actor
+            } else {
+              const h = line.match(ACTOR_HEADER);
+              if (h) {
+                const d = line.match(DURATION_RE);
+                cur = { id: +h[1], name: h[2], uptime: d ? parseDuration(d[1], d[2]) : 0, nodes: [] };
+                actors.push(cur);
+              } else if (cur) {
+                // a node line inside the current actor's tree
+                const d = line.match(DURATION_RE);
+                cur.nodes.push({
+                  depth: leadingWs(line),
+                  label: line.trim(),
+                  seconds: d ? parseDuration(d[1], d[2]) : null,
+                });
+              }
+            }
+          }
+          if (onProg && (i & 65535) === 0) {
+            onProg(i / N);
+            await tick();
+          }
+        }
+        return actors;
+      }
 
-// Parses the WHOLE tree section — every line, every actor. Chunked + async only so a
-// progress bar can update on huge files; nothing is skipped or sampled.
-async function parseActors(treeLines, onProg){
-  const actors=[]; let cur=null; const N=treeLines.length;
-  for (let i=0;i<N;i++){
-    const line=treeLines[i];
-    if (line && line.trim()){
-      if (line.startsWith("[")){                // section header: [Actor N], [Global Barrier Worker], [RPC ...] ...
-        cur=null;                               // stop attaching lines to the previous actor
-      } else {
-        const h = line.match(ACTOR_HEADER);
-        if (h){
-          const d = line.match(DURATION_RE);
-          cur = {id:+h[1], name:h[2], uptime:d?parseDuration(d[1],d[2]):0, nodes:[]};
-          actors.push(cur);
-        } else if (cur){                        // a node line inside the current actor's tree
-          const d = line.match(DURATION_RE);
-          cur.nodes.push({depth:leadingWs(line), label:line.trim(), seconds:d?parseDuration(d[1],d[2]):null});
+      function computeDerived(a) {
+        const n = a.nodes;
+        // epoch wait: shallowest "Epoch ..." span (indent-unit agnostic)
+        let ew = 0;
+        if (n.length) {
+          let minDepth = Infinity;
+          for (const x of n) if (x.depth < minDepth) minDepth = x.depth;
+          const top = n.filter((x) => x.depth === minDepth && x.seconds != null);
+          const epochs = top.filter((x) => x.label.startsWith("Epoch")).map((x) => x.seconds);
+          ew = epochs.length ? arrMax(epochs) : arrMax(top.map((x) => x.seconds));
+        }
+        a.epochWait = ew;
+        // leaves
+        const leaves = [];
+        for (let i = 0; i < n.length; i++) {
+          const isLeaf = !(i + 1 < n.length && n[i + 1].depth > n[i].depth);
+          if (isLeaf) leaves.push(n[i]);
+        }
+        // primary await (drop sub-waits longer than the step = parse noise).
+        // Tie-break by label lexicographically to match Python's max((seconds,label)).
+        let bestSec = -Infinity,
+          bestLbl = null;
+        for (const nd of leaves) {
+          if (nd.seconds == null) continue;
+          if (ew > 0 && nd.seconds > ew + 1e-6) continue;
+          const lbl = normaliseLabel(nd.label);
+          if (nd.seconds > bestSec || (nd.seconds === bestSec && (bestLbl === null || lbl > bestLbl))) {
+            bestSec = nd.seconds;
+            bestLbl = lbl;
+          }
+        }
+        a.primary = bestLbl !== null ? [bestLbl, bestSec] : null;
+        a.category = a.primary ? normaliseCategory(a.primary[0]) : "?";
+        // upstream edges
+        const up = [];
+        for (const nd of leaves) {
+          if (nd.seconds == null) continue;
+          const m = nd.label.match(INPUT_EDGE);
+          if (m) up.push({ id: +m[1], sec: nd.seconds });
+        }
+        a.upstreams = up;
+        delete a.nodes; // free memory on big dumps
+      }
+
+      // Runs computeDerived over EVERY actor. Chunked/async only for the progress bar.
+      async function computeAll(actors, onProg) {
+        const N = actors.length;
+        for (let i = 0; i < N; i++) {
+          computeDerived(actors[i]);
+          if (onProg && (i & 16383) === 0) {
+            onProg(i / N);
+            await tick();
+          }
         }
       }
-    }
-    if (onProg && (i & 65535)===0){ onProg(i/N); await tick(); }
-  }
-  return actors;
-}
 
-function computeDerived(a){
-  const n = a.nodes;
-  // epoch wait: shallowest "Epoch ..." span (indent-unit agnostic)
-  let ew = 0;
-  if (n.length){
-    let minDepth = Infinity; for (const x of n) if (x.depth<minDepth) minDepth=x.depth;
-    const top = n.filter(x=>x.depth===minDepth && x.seconds!=null);
-    const epochs = top.filter(x=>x.label.startsWith("Epoch")).map(x=>x.seconds);
-    ew = epochs.length ? arrMax(epochs) : arrMax(top.map(x=>x.seconds));
-  }
-  a.epochWait = ew;
-  // leaves
-  const leaves=[];
-  for (let i=0;i<n.length;i++){
-    const isLeaf = !(i+1<n.length && n[i+1].depth>n[i].depth);
-    if (isLeaf) leaves.push(n[i]);
-  }
-  // primary await (drop sub-waits longer than the step = parse noise).
-  // Tie-break by label lexicographically to match Python's max((seconds,label)).
-  let bestSec=-Infinity, bestLbl=null;
-  for (const nd of leaves){
-    if (nd.seconds==null) continue;
-    if (ew>0 && nd.seconds>ew+1e-6) continue;
-    const lbl=normaliseLabel(nd.label);
-    if (nd.seconds>bestSec || (nd.seconds===bestSec && (bestLbl===null || lbl>bestLbl))){ bestSec=nd.seconds; bestLbl=lbl; }
-  }
-  a.primary = bestLbl!==null ? [bestLbl, bestSec] : null;
-  a.category = a.primary ? normaliseCategory(a.primary[0]) : "?";
-  // upstream edges
-  const up=[];
-  for (const nd of leaves){ if(nd.seconds==null) continue; const m=nd.label.match(INPUT_EDGE); if(m) up.push({id:+m[1], sec:nd.seconds}); }
-  a.upstreams = up;
-  delete a.nodes;   // free memory on big dumps
-}
+      function parseJvm(jvmLines) {
+        const threads = [];
+        let cur = null;
+        for (const line of jvmLines) {
+          const h = line.match(JVM_THREAD);
+          if (h) {
+            cur = { name: h[1], state: h[3], frames: [] };
+            threads.push(cur);
+          } else if (cur) {
+            const s = line.trim();
+            if (s.startsWith("at ")) cur.frames.push(s.slice(3));
+          }
+        }
+        return threads;
+      }
+      function collapseThreadName(n) {
+        return n.replace(/-thread-\d+/, "-thread-*").replace(/-\d+$/, "-*");
+      }
+      function repFrame(t) {
+        for (const f of t.frames) {
+          if (f.includes("risingwave") || f.includes("connector") || f.startsWith("app//")) return f;
+        }
+        return t.frames.length ? t.frames[0] : "(no frames)";
+      }
 
-// Runs computeDerived over EVERY actor. Chunked/async only for the progress bar.
-async function computeAll(actors, onProg){
-  const N=actors.length;
-  for (let i=0;i<N;i++){ computeDerived(actors[i]);
-    if (onProg && (i & 16383)===0){ onProg(i/N); await tick(); } }
-}
+      // ---- Counter helpers ----
+      function counter(iter) {
+        const m = new Map();
+        for (const k of iter) m.set(k, (m.get(k) || 0) + 1);
+        return m;
+      }
+      function mostCommon(map, n) {
+        const a = [...map.entries()].sort((x, y) => y[1] - x[1]);
+        return n ? a.slice(0, n) : a;
+      }
+      function median(sortedAsc) {
+        const k = sortedAsc.length;
+        if (!k) return 0;
+        const mid = k >> 1;
+        return k % 2 ? sortedAsc[mid] : (sortedAsc[mid - 1] + sortedAsc[mid]) / 2;
+      }
 
-function parseJvm(jvmLines){
-  const threads=[]; let cur=null;
-  for (const line of jvmLines){
-    const h=line.match(JVM_THREAD);
-    if (h){ cur={name:h[1], state:h[3], frames:[]}; threads.push(cur); }
-    else if (cur){ const s=line.trim(); if(s.startsWith("at ")) cur.frames.push(s.slice(3)); }
-  }
-  return threads;
-}
-function collapseThreadName(n){ return n.replace(/-thread-\d+/,"-thread-*").replace(/-\d+$/,"-*"); }
-function repFrame(t){
-  for (const f of t.frames){ if (f.includes("risingwave")||f.includes("connector")||f.startsWith("app//")) return f; }
-  return t.frames.length ? t.frames[0] : "(no frames)";
-}
+      // ---- chain walking ----
+      function walkToRoot(startId, byId, maxHops) {
+        const path = [startId];
+        const seen = new Set([startId]);
+        let cur = startId;
+        for (let h = 0; h < maxHops; h++) {
+          const a = byId.get(cur);
+          if (!a) break;
+          let nxt = null,
+            best = -Infinity;
+          for (const e of a.upstreams) {
+            if (!byId.has(e.id) || seen.has(e.id)) continue;
+            const w = byId.get(e.id).epochWait;
+            if (w > best) {
+              best = w;
+              nxt = e.id;
+            }
+          }
+          if (nxt == null) break;
+          path.push(nxt);
+          seen.add(nxt);
+          cur = nxt;
+        }
+        return path;
+      }
 
-// ---- Counter helpers ----
-function counter(iter){ const m=new Map(); for(const k of iter) m.set(k,(m.get(k)||0)+1); return m; }
-function mostCommon(map,n){ const a=[...map.entries()].sort((x,y)=>y[1]-x[1]); return n?a.slice(0,n):a; }
-function median(sortedAsc){ const k=sortedAsc.length; if(!k) return 0; const mid=k>>1; return k%2?sortedAsc[mid]:(sortedAsc[mid-1]+sortedAsc[mid])/2; }
+      // ===================================================================== //
+      // Analysis                                                              //
+      // ===================================================================== //
+      function analyse(actors, jvm, maxHops) {
+        const data = { total_actors: actors.length, stuck_threshold: STUCK_S };
+        if (actors.length) {
+          const waits = actors.map((a) => a.epochWait).sort((x, y) => x - y);
+          const q = (p) => waits[Math.min(Math.floor(waits.length * p), waits.length - 1)];
+          data.wait_stats = { median: median(waits), p95: q(0.95), p99: q(0.99), max: waits[waits.length - 1] };
 
-// ---- chain walking ----
-function walkToRoot(startId, byId, maxHops){
-  const path=[startId]; const seen=new Set([startId]); let cur=startId;
-  for (let h=0;h<maxHops;h++){
-    const a=byId.get(cur); if(!a) break;
-    let nxt=null, best=-Infinity;
-    for (const e of a.upstreams){ if(!byId.has(e.id)||seen.has(e.id)) continue; const w=byId.get(e.id).epochWait; if(w>best){best=w;nxt=e.id;} }
-    if (nxt==null) break;
-    path.push(nxt); seen.add(nxt); cur=nxt;
-  }
-  return path;
-}
+          const dist = new Map();
+          for (const w of waits) {
+            for (let i = 0; i < BUCKET_EDGES.length - 1; i++) {
+              const lo = BUCKET_EDGES[i],
+                hi = BUCKET_EDGES[i + 1];
+              if (w >= lo && w < hi) {
+                dist.set(i, (dist.get(i) || 0) + 1);
+                break;
+              }
+            }
+          }
+          data.distribution = [];
+          for (let i = 0; i < BUCKET_EDGES.length - 1; i++) {
+            const lo = BUCKET_EDGES[i],
+              hi = BUCKET_EDGES[i + 1];
+            const label = hi === Infinity ? ">" + lo + " s" : lo + "–" + hi + " s";
+            data.distribution.push([label, dist.get(i) || 0]);
+          }
+          data.stuck_count = actors.reduce((c, a) => c + (a.epochWait >= STUCK_S ? 1 : 0), 0);
 
-// ===================================================================== //
-// Analysis                                                              //
-// ===================================================================== //
-function analyse(actors, jvm, maxHops){
-  const data={total_actors:actors.length, stuck_threshold:STUCK_S};
-  if (actors.length){
-    const waits = actors.map(a=>a.epochWait).sort((x,y)=>x-y);
-    const q=p=>waits[Math.min(Math.floor(waits.length*p), waits.length-1)];
-    data.wait_stats={median:median(waits), p95:q(0.95), p99:q(0.99), max:waits[waits.length-1]};
+          const byPipe = new Map();
+          for (const a of actors) {
+            if (!byPipe.has(a.name)) byPipe.set(a.name, []);
+            byPipe.get(a.name).push(a);
+          }
+          const pipes = [];
+          for (const [name, g] of byPipe) {
+            const ws = g.map((x) => x.epochWait).sort((x, y) => x - y);
+            pipes.push([arrMax(ws), median(ws), g.length, name]);
+          }
+          pipes.sort((a, b) => b[0] - a[0] || b[2] - a[2]);
+          data.pipelines = pipes;
 
-    const dist=new Map();
-    for (const w of waits){
-      for (let i=0;i<BUCKET_EDGES.length-1;i++){ const lo=BUCKET_EDGES[i],hi=BUCKET_EDGES[i+1];
-        if (w>=lo && w<hi){ dist.set(i,(dist.get(i)||0)+1); break; } }
-    }
-    data.distribution=[];
-    for (let i=0;i<BUCKET_EDGES.length-1;i++){ const lo=BUCKET_EDGES[i],hi=BUCKET_EDGES[i+1];
-      const label = hi===Infinity ? (">"+lo+" s") : (lo+"–"+hi+" s");
-      data.distribution.push([label, dist.get(i)||0]); }
-    data.stuck_count = actors.reduce((c,a)=>c+(a.epochWait>=STUCK_S?1:0),0);
+          data.await_points = mostCommon(counter(actors.filter((a) => a.primary).map((a) => a.primary[0])), 0);
+          data.top_actors = actors
+            .slice()
+            .sort((a, b) => b.epochWait - a.epochWait)
+            .map((a) => [a.epochWait, a.id, a.name, a.primary ? a.primary[0] : "?"]);
 
-    const byPipe=new Map();
-    for (const a of actors){ if(!byPipe.has(a.name)) byPipe.set(a.name,[]); byPipe.get(a.name).push(a); }
-    const pipes=[];
-    for (const [name,g] of byPipe){ const ws=g.map(x=>x.epochWait).sort((x,y)=>x-y);
-      pipes.push([arrMax(ws), median(ws), g.length, name]); }
-    pipes.sort((a,b)=> b[0]-a[0] || b[2]-a[2]);
-    data.pipelines = pipes;
+          const byId = new Map(actors.map((a) => [a.id, a]));
+          const roots = new Map();
+          for (const a of actors) {
+            const r = byId.get(walkToRoot(a.id, byId, maxHops).at(-1)).category;
+            roots.set(r, (roots.get(r) || 0) + 1);
+          }
+          data.root_split = mostCommon(roots, 0);
 
-    data.await_points = mostCommon(counter(actors.filter(a=>a.primary).map(a=>a.primary[0])), 0);
-    data.top_actors = actors.slice().sort((a,b)=>b.epochWait-a.epochWait)
-      .map(a=>[a.epochWait, a.id, a.name, a.primary?a.primary[0]:"?"]);
+          data.chains = [];
+          for (const [, , , name] of data.pipelines) {
+            const g = byPipe.get(name);
+            let seed = g[0];
+            for (const x of g) if (x.epochWait > seed.epochWait) seed = x;
+            const path = walkToRoot(seed.id, byId, maxHops);
+            const hops = [];
+            let last = null;
+            for (const id of path) {
+              const a = byId.get(id);
+              if (a.name === last) continue;
+              last = a.name;
+              hops.push([a.name, a.epochWait, a.category]);
+            }
+            data.chains.push({ pipeline: name, max_wait: seed.epochWait, actor_count: g.length, hops });
+          }
+        }
+        if (jvm.length) {
+          data.jvm = {
+            total: jvm.length,
+            states: mostCommon(counter(jvm.map((t) => t.state)), 0),
+            groups: mostCommon(counter(jvm.map((t) => collapseThreadName(t.name))), 0),
+            runnable: mostCommon(counter(jvm.filter((t) => t.state === "RUNNABLE").map(repFrame)), 0),
+            blocked: jvm.filter((t) => t.state === "BLOCKED").length,
+          };
+        }
+        return data;
+      }
 
-    const byId=new Map(actors.map(a=>[a.id,a]));
-    const roots=new Map();
-    for (const a of actors){ const r=byId.get(walkToRoot(a.id,byId,maxHops).at(-1)).category; roots.set(r,(roots.get(r)||0)+1); }
-    data.root_split = mostCommon(roots,0);
+      function toJson(data, source) {
+        const r = (x) => Math.round(x * 1000) / 1000;
+        const o = { source, generated_utc: new Date().toISOString(), total_actors: data.total_actors };
+        if (!data.total_actors) return o;
+        o.stuck_threshold = data.stuck_threshold;
+        o.stuck_count = data.stuck_count;
+        o.wait_stats = {};
+        for (const k in data.wait_stats) o.wait_stats[k] = r(data.wait_stats[k]);
+        o.distribution = data.distribution.map(([b, c]) => ({ bucket: b, actors: c }));
+        o.root_split = data.root_split.map(([k, v]) => ({ await: k, actors: v }));
+        o.pipelines = data.pipelines.map(([mx, md, c, n]) => ({ pipeline: n, max: r(mx), median: r(md), actors: c }));
+        o.await_points = data.await_points.map(([k, v]) => ({ await: k, actors: v }));
+        o.top_actors = data.top_actors.map(([w, id, n, aw]) => ({ wait: r(w), actor: id, pipeline: n, await: aw }));
+        o.chains = data.chains.map((c) => ({
+          pipeline: c.pipeline,
+          max_wait: r(c.max_wait),
+          actor_count: c.actor_count,
+          hops: c.hops.map(([n, w, cat]) => ({ pipeline: n, wait: r(w), await: cat })),
+        }));
+        if (data.jvm)
+          o.jvm = {
+            total: data.jvm.total,
+            states: data.jvm.states.map(([s, c]) => ({ state: s, count: c })),
+            groups: data.jvm.groups.map(([g, c]) => ({ group: g, count: c })),
+            runnable: data.jvm.runnable.map(([f, c]) => ({ frame: f, count: c })),
+            blocked_count: data.jvm.blocked,
+          };
+        return o;
+      }
 
-    data.chains=[];
-    for (const [,,,name] of data.pipelines){
-      const g=byPipe.get(name); let seed=g[0]; for(const x of g) if(x.epochWait>seed.epochWait) seed=x;
-      const path=walkToRoot(seed.id,byId,maxHops); const hops=[]; let last=null;
-      for (const id of path){ const a=byId.get(id); if(a.name===last) continue; last=a.name; hops.push([a.name,a.epochWait,a.category]); }
-      data.chains.push({pipeline:name, max_wait:seed.epochWait, actor_count:g.length, hops});
-    }
-  }
-  if (jvm.length){
-    data.jvm={
-      total:jvm.length,
-      states:mostCommon(counter(jvm.map(t=>t.state)),0),
-      groups:mostCommon(counter(jvm.map(t=>collapseThreadName(t.name))),0),
-      runnable:mostCommon(counter(jvm.filter(t=>t.state==="RUNNABLE").map(repFrame)),0),
-      blocked:jvm.filter(t=>t.state==="BLOCKED").length,
-    };
-  }
-  return data;
-}
+      // ===================================================================== //
+      // Rendering                                                             //
+      // ===================================================================== //
+      function esc(s) {
+        return String(s).replace(
+          /[&<>"']/g,
+          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+        );
+      }
+      function badge(cat) {
+        return `<span class="badge b-${CAT_COLOUR[cat] || "gray"}">${esc(cat)}</span>`;
+      }
+      function nf(n) {
+        return n.toLocaleString("en-US");
+      }
+      function barRow(label, count, total) {
+        const pct = total ? (count / total) * 100 : 0;
+        return (
+          `<tr><td>${esc(label)}</td><td class=num>${nf(count)}</td>` +
+          `<td style="width:55%"><div class=barcell><span style="width:${pct.toFixed(1)}%"></span>` +
+          `<em>${pct.toFixed(1)}%</em></div></td></tr>`
+        );
+      }
 
-function toJson(data, source){
-  const r=x=>Math.round(x*1000)/1000;
-  const o={source, generated_utc:new Date().toISOString(), total_actors:data.total_actors};
-  if (!data.total_actors) return o;
-  o.stuck_threshold=data.stuck_threshold; o.stuck_count=data.stuck_count;
-  o.wait_stats={}; for(const k in data.wait_stats) o.wait_stats[k]=r(data.wait_stats[k]);
-  o.distribution=data.distribution.map(([b,c])=>({bucket:b,actors:c}));
-  o.root_split=data.root_split.map(([k,v])=>({await:k,actors:v}));
-  o.pipelines=data.pipelines.map(([mx,md,c,n])=>({pipeline:n,max:r(mx),median:r(md),actors:c}));
-  o.await_points=data.await_points.map(([k,v])=>({await:k,actors:v}));
-  o.top_actors=data.top_actors.map(([w,id,n,aw])=>({wait:r(w),actor:id,pipeline:n,await:aw}));
-  o.chains=data.chains.map(c=>({pipeline:c.pipeline,max_wait:r(c.max_wait),actor_count:c.actor_count,
-    hops:c.hops.map(([n,w,cat])=>({pipeline:n,wait:r(w),await:cat}))}));
-  if (data.jvm) o.jvm={total:data.jvm.total, states:data.jvm.states.map(([s,c])=>({state:s,count:c})),
-    groups:data.jvm.groups.map(([g,c])=>({group:g,count:c})),
-    runnable:data.jvm.runnable.map(([f,c])=>({frame:f,count:c})), blocked_count:data.jvm.blocked};
-  return o;
-}
+      const CAT_HEX = {
+        amber: "#e0a13c",
+        red: "#e05a5a",
+        blue: "#5aa0e0",
+        teal: "#3fb8a0",
+        purple: "#9b8cf0",
+        gray: "#6b7280",
+        green: "#57b368",
+      };
+      function catHex(cat) {
+        return CAT_HEX[CAT_COLOUR[cat] || "gray"];
+      }
+      function pushMap(m, k, v) {
+        if (!m.has(k)) m.set(k, []);
+        m.get(k).push(v);
+      }
+      function info(htmlStr) {
+        return `<details class=info><summary>ⓘ How to read this</summary><div class=ibody>${htmlStr}</div></details>`;
+      }
 
-// ===================================================================== //
-// Rendering                                                             //
-// ===================================================================== //
-function esc(s){ return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
-function badge(cat){ return `<span class="badge b-${CAT_COLOUR[cat]||"gray"}">${esc(cat)}</span>`; }
-function nf(n){ return n.toLocaleString("en-US"); }
-function barRow(label,count,total){ const pct=total?count/total*100:0;
-  return `<tr><td>${esc(label)}</td><td class=num>${nf(count)}</td>`
-       + `<td style="width:55%"><div class=barcell><span style="width:${pct.toFixed(1)}%"></span>`
-       + `<em>${pct.toFixed(1)}%</em></div></td></tr>`; }
+      // per-section "show more" state — each section starts small and expands independently
+      const SECTION_CFG = {
+        graph: { init: 6, step: 6 },
+        chains: { init: 5, step: 5 },
+        pipelines: { init: 8, step: 12 },
+        awaits: { init: 8, step: 12 },
+        actors: { init: 8, step: 12 },
+        jvmGroups: { init: 8, step: 12 },
+        jvmRun: { init: 6, step: 10 },
+      };
+      let SHOWN = {};
+      function resetShown() {
+        SHOWN = {};
+        for (const k in SECTION_CFG) SHOWN[k] = SECTION_CFG[k].init;
+      }
+      function moreBtn(key, total) {
+        const shown = SHOWN[key] || 0;
+        if (shown >= total) return "";
+        return `<button class=more data-sec="${key}">Show more… (${total - shown} more)</button>`;
+      }
 
-const CAT_HEX={amber:"#e0a13c",red:"#e05a5a",blue:"#5aa0e0",teal:"#3fb8a0",purple:"#9b8cf0",gray:"#6b7280",green:"#57b368"};
-function catHex(cat){ return CAT_HEX[CAT_COLOUR[cat]||"gray"]; }
-function pushMap(m,k,v){ if(!m.has(k)) m.set(k,[]); m.get(k).push(v); }
-function info(htmlStr){ return `<details class=info><summary>ⓘ How to read this</summary><div class=ibody>${htmlStr}</div></details>`; }
+      // ---- sortable + filterable tables ----
+      // Filtering/sorting operate on the FULL dataset for that section, then the result
+      // is sliced to SHOWN[key]; they never limit what was parsed/analysed.
+      let TABLE_STATE = {}; // secKey -> {sort:colIndex|null, dir:1|-1, filter:""}
+      function tstate(k) {
+        return TABLE_STATE[k] || (TABLE_STATE[k] = { sort: null, dir: -1, filter: "" });
+      }
+      function tableHTML(secKey, columns, rows) {
+        const st = tstate(secKey);
+        let full = rows;
+        if (st.filter) {
+          const q = st.filter.toLowerCase();
+          full = full.filter((r) => columns.some((c) => String(c.get(r)).toLowerCase().includes(q)));
+        }
+        if (st.sort != null && columns[st.sort]) {
+          const c = columns[st.sort];
+          full = full.slice().sort((a, b) => {
+            const x = c.get(a),
+              y = c.get(b);
+            return c.type === "num" ? (x - y) * st.dir : String(x).localeCompare(String(y)) * st.dir;
+          });
+        }
+        const shown = full.slice(0, SHOWN[secKey] || 0);
+        const ths = columns
+          .map((c, i) => {
+            const ar = st.sort === i ? (st.dir < 0 ? " ▾" : " ▴") : "";
+            return `<th class="th-sort${c.type === "num" ? " num" : ""}" data-sec="${secKey}" data-col="${i}" title="click to sort">${esc(c.label)}${ar}</th>`;
+          })
+          .join("");
+        const filt = `<tr class=filtrow><td colspan="${columns.length}"><input class=tfilter data-sec="${secKey}" placeholder="filter ${esc(secKey)}…" value="${esc(st.filter)}"></td></tr>`;
+        const body = shown
+          .map(
+            (r) =>
+              "<tr>" +
+              columns
+                .map((c) =>
+                  c.cell ? c.cell(r) : `<td class="${c.cls || (c.type === "num" ? "num" : "")}">${esc(c.get(r))}</td>`,
+                )
+                .join("") +
+              "</tr>",
+          )
+          .join("");
+        return (
+          `<table class=sortable><thead><tr>${ths}</tr>${filt}</thead><tbody>${body}</tbody></table>` +
+          moreBtn(secKey, full.length)
+        );
+      }
 
-// per-section "show more" state — each section starts small and expands independently
-const SECTION_CFG={graph:{init:6,step:6}, chains:{init:5,step:5}, pipelines:{init:8,step:12},
-  awaits:{init:8,step:12}, actors:{init:8,step:12}, jvmGroups:{init:8,step:12}, jvmRun:{init:6,step:10}};
-let SHOWN={};
-function resetShown(){ SHOWN={}; for(const k in SECTION_CFG) SHOWN[k]=SECTION_CFG[k].init; }
-function moreBtn(key,total){ const shown=SHOWN[key]||0; if(shown>=total) return "";
-  return `<button class=more data-sec="${key}">Show more… (${total-shown} more)</button>`; }
+      // edge colour by backpressure importance: teal (low) -> amber -> red (high)
+      function edgeColor(t) {
+        const S = [
+          [63, 184, 160],
+          [224, 161, 60],
+          [224, 90, 90],
+        ];
+        const [a, b, f] = t <= 0.5 ? [S[0], S[1], t / 0.5] : [S[1], S[2], (t - 0.5) / 0.5];
+        const c = a.map((v, i) => Math.round(v + (b[i] - v) * f));
+        return `rgb(${c[0]},${c[1]},${c[2]})`;
+      }
 
-// ---- sortable + filterable tables ----
-// Filtering/sorting operate on the FULL dataset for that section, then the result
-// is sliced to SHOWN[key]; they never limit what was parsed/analysed.
-let TABLE_STATE={};   // secKey -> {sort:colIndex|null, dir:1|-1, filter:""}
-function tstate(k){ return TABLE_STATE[k] || (TABLE_STATE[k]={sort:null, dir:-1, filter:""}); }
-function tableHTML(secKey, columns, rows){
-  const st=tstate(secKey);
-  let full=rows;
-  if(st.filter){ const q=st.filter.toLowerCase();
-    full=full.filter(r=>columns.some(c=>String(c.get(r)).toLowerCase().includes(q))); }
-  if(st.sort!=null && columns[st.sort]){ const c=columns[st.sort];
-    full=full.slice().sort((a,b)=>{ const x=c.get(a),y=c.get(b);
-      return c.type==="num" ? (x-y)*st.dir : String(x).localeCompare(String(y))*st.dir; }); }
-  const shown=full.slice(0, SHOWN[secKey]||0);
-  const ths=columns.map((c,i)=>{ const ar=st.sort===i?(st.dir<0?" ▾":" ▴"):"";
-    return `<th class="th-sort${c.type==='num'?' num':''}" data-sec="${secKey}" data-col="${i}" title="click to sort">${esc(c.label)}${ar}</th>`; }).join("");
-  const filt=`<tr class=filtrow><td colspan="${columns.length}"><input class=tfilter data-sec="${secKey}" placeholder="filter ${esc(secKey)}…" value="${esc(st.filter)}"></td></tr>`;
-  const body=shown.map(r=>"<tr>"+columns.map(c=>c.cell?c.cell(r):`<td class="${c.cls||(c.type==='num'?'num':'')}">${esc(c.get(r))}</td>`).join("")+"</tr>").join("");
-  return `<table class=sortable><thead><tr>${ths}</tr>${filt}</thead><tbody>${body}</tbody></table>`+moreBtn(secKey, full.length);
-}
+      const GNODE_W = 182,
+        GNODE_H = 44,
+        GCOL_W = 232,
+        GROW_H = 66; // shared by graphSvg and the drag handler
+      // Edge path: run flat along the source row through the intervening (clear) columns,
+      // then do the whole vertical S-bend inside the last gap before the target node.
+      function gedgeD(x1, y1, x2, y2) {
+        const gap = GCOL_W - GNODE_W,
+          xt = Math.max(x1, x2 - gap),
+          c = (x2 - xt) * 0.5;
+        return `M${x1},${y1} L${xt},${y1} C${xt + c},${y1} ${x2 - c},${y2} ${x2},${y2}`;
+      }
+      let LAYOUT = "planar"; // "planar" | "custom"  (severity layout deprecated)
+      let CUSTOM_POS = {}; // node name -> [x,y] in custom mode
+      let GRAPH_FILTER = null; // Set of node names to restrict the graph to (subtree focus), or null
 
-// edge colour by backpressure importance: teal (low) -> amber -> red (high)
-function edgeColor(t){
-  const S=[[63,184,160],[224,161,60],[224,90,90]];
-  const [a,b,f] = t<=0.5 ? [S[0],S[1],t/0.5] : [S[1],S[2],(t-0.5)/0.5];
-  const c=a.map((v,i)=>Math.round(v+(b[i]-v)*f));
-  return `rgb(${c[0]},${c[1]},${c[2]})`;
-}
+      // median-heuristic crossing reduction for a layered DAG (fewer edge crossings ≈ planar)
+      function planarOrder(cols, maxLayer, preds, succ) {
+        const order = new Map();
+        for (let l = 0; l <= maxLayer; l++) order.set(l, (cols.get(l) || []).slice());
+        const idxOf = (l) => {
+          const m = new Map();
+          order.get(l).forEach((n, i) => m.set(n, i));
+          return m;
+        };
+        const med = (xs) => {
+          xs = xs.filter((v) => v >= 0).sort((a, b) => a - b);
+          const n = xs.length;
+          if (!n) return -1;
+          const m = n >> 1;
+          if (n % 2) return xs[m];
+          if (n === 2) return (xs[0] + xs[1]) / 2;
+          const Lo = xs[m - 1] - xs[0],
+            Ro = xs[n - 1] - xs[m];
+          return Lo + Ro === 0 ? (xs[m - 1] + xs[m]) / 2 : (xs[m - 1] * Ro + xs[m] * Lo) / (Lo + Ro);
+        };
+        const reorder = (l, neigh) => {
+          const keyed = order.get(l).map((n, i) => {
+            let k = med(neigh(n));
+            if (k < 0) k = i;
+            return [n, k, i];
+          });
+          keyed.sort((a, b) => (a[1] === b[1] ? a[2] - b[2] : a[1] - b[1]));
+          order.set(
+            l,
+            keyed.map((x) => x[0]),
+          );
+        };
+        for (let it = 0; it < 8; it++) {
+          for (let l = 1; l <= maxLayer; l++) {
+            const prev = idxOf(l - 1);
+            reorder(l, (n) => (preds.get(n) || []).map((p) => prev.get(p)));
+          }
+          for (let l = maxLayer - 1; l >= 0; l--) {
+            const next = idxOf(l + 1);
+            reorder(l, (n) => (succ.get(n) || []).map((s) => next.get(s)));
+          }
+        }
+        return order;
+      }
 
-const GNODE_W=182, GNODE_H=44, GCOL_W=232, GROW_H=66;   // shared by graphSvg and the drag handler
-// Edge path: run flat along the source row through the intervening (clear) columns,
-// then do the whole vertical S-bend inside the last gap before the target node.
-function gedgeD(x1,y1,x2,y2){
-  const gap=GCOL_W-GNODE_W, xt=Math.max(x1, x2-gap), c=(x2-xt)*0.5;
-  return `M${x1},${y1} L${xt},${y1} C${xt+c},${y1} ${x2-c},${y2} ${x2},${y2}`;
-}
-let LAYOUT="planar";     // "planar" | "custom"  (severity layout deprecated)
-let CUSTOM_POS={};        // node name -> [x,y] in custom mode
-let GRAPH_FILTER=null;    // Set of node names to restrict the graph to (subtree focus), or null
+      // Sugiyama coordinate assignment: pull each node to the barycentre of its
+      // neighbours (aligning pass-throughs / fan-ins), keeping order + min spacing.
+      function assignY(order, maxLayer, preds, succ, ROWH) {
+        const y = new Map();
+        for (let l = 0; l <= maxLayer; l++) order.get(l).forEach((n, i) => y.set(n, i * ROWH));
+        const avg = (vs) => {
+          vs = vs.filter((v) => v != null);
+          return vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : null;
+        };
+        const place = (arr, target) => {
+          for (const n of arr) {
+            const t = target(n);
+            if (t != null) y.set(n, t);
+          }
+          for (let i = 1; i < arr.length; i++) {
+            const need = y.get(arr[i - 1]) + ROWH;
+            if (y.get(arr[i]) < need) y.set(arr[i], need);
+          }
+        };
+        for (let it = 0; it < 14; it++) {
+          for (let l = maxLayer - 1; l >= 0; l--)
+            place(order.get(l), (n) => avg((succ.get(n) || []).map((s) => y.get(s)))); // up sweep (by successors)
+          for (let l = 1; l <= maxLayer; l++)
+            place(order.get(l), (n) => avg((preds.get(n) || []).map((p) => y.get(p)))); // down sweep last (roots settle on preds)
+        }
+        let miny = Infinity;
+        for (const v of y.values()) if (v < miny) miny = v;
+        for (const [k, v] of y) y.set(k, v - miny);
+        return y;
+      }
 
-// median-heuristic crossing reduction for a layered DAG (fewer edge crossings ≈ planar)
-function planarOrder(cols, maxLayer, preds, succ){
-  const order=new Map();
-  for(let l=0;l<=maxLayer;l++) order.set(l,(cols.get(l)||[]).slice());
-  const idxOf=l=>{ const m=new Map(); order.get(l).forEach((n,i)=>m.set(n,i)); return m; };
-  const med=xs=>{ xs=xs.filter(v=>v>=0).sort((a,b)=>a-b); const n=xs.length; if(!n) return -1;
-    const m=n>>1; if(n%2) return xs[m]; if(n===2) return (xs[0]+xs[1])/2;
-    const Lo=xs[m-1]-xs[0], Ro=xs[n-1]-xs[m]; return (Lo+Ro)===0?(xs[m-1]+xs[m])/2:(xs[m-1]*Ro+xs[m]*Lo)/(Lo+Ro); };
-  const reorder=(l,neigh)=>{ const keyed=order.get(l).map((n,i)=>{ let k=med(neigh(n)); if(k<0)k=i; return [n,k,i]; });
-    keyed.sort((a,b)=> a[1]===b[1]? a[2]-b[2] : a[1]-b[1]); order.set(l, keyed.map(x=>x[0])); };
-  for(let it=0; it<8; it++){
-    for(let l=1;l<=maxLayer;l++){ const prev=idxOf(l-1); reorder(l, n=>(preds.get(n)||[]).map(p=>prev.get(p))); }
-    for(let l=maxLayer-1;l>=0;l--){ const next=idxOf(l+1); reorder(l, n=>(succ.get(n)||[]).map(s=>next.get(s))); }
-  }
-  return order;
-}
+      function graphSvg(chains, limit) {
+        const use = chains.slice(0, Math.min(limit, chains.length));
+        if (!use.length) return "<p class=note>No chains to graph.</p>";
+        const nodes = new Map(),
+          edges = new Map();
+        for (const ch of use) {
+          for (let i = 0; i < ch.hops.length; i++) {
+            const [nm, w, cat] = ch.hops[i];
+            let nd = nodes.get(nm);
+            if (!nd) {
+              nd = { name: nm, wait: w, cat };
+              nodes.set(nm, nd);
+            }
+            if (w > nd.wait) nd.wait = w;
+            if (nd.cat === "input" && cat !== "input") nd.cat = cat; // prefer a terminal category
+            if (i > 0) {
+              const f = ch.hops[i - 1][0],
+                k = f + "" + nm;
+              edges.set(k, Math.max(edges.get(k) || 0, ch.hops[i - 1][1]));
+            }
+          }
+        }
+        if (GRAPH_FILTER) {
+          // subtree focus: keep only selected nodes + their edges
+          for (const n of [...nodes.keys()]) if (!GRAPH_FILTER.has(n)) nodes.delete(n);
+          for (const k of [...edges.keys()]) {
+            const s = k.split("");
+            if (!GRAPH_FILTER.has(s[0]) || !GRAPH_FILTER.has(s[1])) edges.delete(k);
+          }
+        }
+        const preds = new Map();
+        for (const k of edges.keys()) {
+          const [f, t] = k.split("");
+          pushMap(preds, t, f);
+        }
+        const succ = new Map();
+        for (const [t, fs] of preds) for (const f of fs) pushMap(succ, f, t);
+        const layer = new Map();
+        function L(n, guard) {
+          if (layer.has(n)) return layer.get(n);
+          if (guard.has(n)) return 0;
+          guard.add(n);
+          let m = 0;
+          for (const p of preds.get(n) || []) m = Math.max(m, L(p, guard) + 1);
+          layer.set(n, m);
+          return m;
+        }
+        for (const n of nodes.keys()) L(n, new Set());
+        const cols = new Map();
+        let maxLayer = 0;
+        for (const [n, l] of layer) {
+          pushMap(cols, l, n);
+          if (l > maxLayer) maxLayer = l;
+        }
+        const NW = GNODE_W,
+          NH = GNODE_H,
+          COLW = 232,
+          ROWH = 66,
+          PADX = 16,
+          PADY = 16;
+        for (let l = 0; l <= maxLayer; l++) (cols.get(l) || []).sort((a, b) => nodes.get(b).wait - nodes.get(a).wait); // init order (by wait)
+        const order = planarOrder(cols, maxLayer, preds, succ);
+        const yy = assignY(order, maxLayer, preds, succ, ROWH);
+        const pos = new Map();
+        for (let l = 0; l <= maxLayer; l++)
+          order.get(l).forEach((n) => pos.set(n, { x: PADX + l * COLW, y: PADY + yy.get(n) }));
+        if (LAYOUT === "custom") {
+          for (const n of nodes.keys()) {
+            const c = CUSTOM_POS[n];
+            if (c) pos.set(n, { x: c[0], y: c[1] });
+          }
+        }
+        let W = 0,
+          H = 0;
+        for (const p of pos.values()) {
+          if (p.x + NW > W) W = p.x + NW;
+          if (p.y + NH > H) H = p.y + NH;
+        }
+        W += PADX;
+        H += PADY;
+        let maxEW = 0.001;
+        for (const w of edges.values()) if (w > maxEW) maxEW = w;
+        let s = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role=img aria-label="Backpressure chain graph">`;
+        // no arrowheads: direction is implicit (downstream on the left, roots on the right)
+        for (const [k, w] of edges) {
+          const [f, t] = k.split("");
+          const a = pos.get(f),
+            b = pos.get(t);
+          if (!a || !b) continue;
+          const x1 = a.x + NW,
+            y1 = a.y + NH / 2,
+            x2 = b.x,
+            y2 = b.y + NH / 2;
+          const sw = (1.2 + 5 * (w / maxEW)).toFixed(1);
+          s += `<path class=gedge data-from="${esc(f)}" data-to="${esc(t)}" d="${gedgeD(x1, y1, x2, y2)}" fill=none stroke="${edgeColor(w / maxEW)}" stroke-opacity="0.85" stroke-width=${sw}><title>${esc(f)} → ${esc(t)}: ${w.toFixed(2)}s</title></path>`;
+        }
+        for (const [n, nd] of nodes) {
+          const p = pos.get(n),
+            hex = catHex(nd.cat);
+          const disp = n.length > 24 ? n.slice(0, 23) + "…" : n;
+          s +=
+            `<g class=gnode data-node="${esc(n)}" data-x="${p.x}" data-y="${p.y}" transform="translate(${p.x},${p.y})">` +
+            `<title>${esc(n)} — ${esc(nd.cat)} — ${nd.wait.toFixed(2)}s (drag to move)</title>` +
+            `<rect x=0 y=0 width=${NW} height=${NH} rx=8 fill="${hex}22" stroke="${hex}" stroke-opacity="0.75"/>` +
+            `<text class=nt x=11 y=18 font-size=12>${esc(disp)}</text>` +
+            `<text class=ns x=11 y=34 font-size=11>${esc(nd.cat)} · ${nd.wait.toFixed(2)}s</text></g>`;
+        }
+        s += "</svg>";
+        return s;
+      }
 
-// Sugiyama coordinate assignment: pull each node to the barycentre of its
-// neighbours (aligning pass-throughs / fan-ins), keeping order + min spacing.
-function assignY(order, maxLayer, preds, succ, ROWH){
-  const y=new Map();
-  for(let l=0;l<=maxLayer;l++) order.get(l).forEach((n,i)=> y.set(n, i*ROWH));
-  const avg=vs=>{ vs=vs.filter(v=>v!=null); return vs.length? vs.reduce((a,b)=>a+b,0)/vs.length : null; };
-  const place=(arr,target)=>{
-    for(const n of arr){ const t=target(n); if(t!=null) y.set(n,t); }
-    for(let i=1;i<arr.length;i++){ const need=y.get(arr[i-1])+ROWH; if(y.get(arr[i])<need) y.set(arr[i],need); }
-  };
-  for(let it=0; it<14; it++){
-    for(let l=maxLayer-1;l>=0;l--) place(order.get(l), n=>avg((succ.get(n)||[]).map(s=>y.get(s))));  // up sweep (by successors)
-    for(let l=1;l<=maxLayer;l++)   place(order.get(l), n=>avg((preds.get(n)||[]).map(p=>y.get(p))));  // down sweep last (roots settle on preds)
-  }
-  let miny=Infinity; for(const v of y.values()) if(v<miny) miny=v;
-  for(const [k,v] of y) y.set(k, v-miny);
-  return y;
-}
+      function renderReport(data) {
+        const total = data.total_actors;
+        if (!total) return "<p>No actors parsed. If this is a dump with a non-standard format, check the console.</p>";
+        const s = data.wait_stats;
+        const out = [];
+        const cards = [
+          ["Actors", nf(total)],
+          ["Epoch-wait median", s.median.toFixed(2) + "s"],
+          ["p99", s.p99.toFixed(2) + "s"],
+          ["max", s.max.toFixed(2) + "s"],
+          ["Actors ≥ 5s", nf(data.stuck_count)],
+        ];
+        out.push(
+          "<div class=cards>" +
+            cards.map(([k, v]) => `<div class=card><div class=k>${k}</div><div class=v>${v}</div></div>`).join("") +
+            "</div>",
+        );
 
-function graphSvg(chains, limit){
-  const use=chains.slice(0, Math.min(limit, chains.length));
-  if(!use.length) return "<p class=note>No chains to graph.</p>";
-  const nodes=new Map(), edges=new Map();
-  for(const ch of use){
-    for(let i=0;i<ch.hops.length;i++){
-      const [nm,w,cat]=ch.hops[i];
-      let nd=nodes.get(nm); if(!nd){ nd={name:nm,wait:w,cat}; nodes.set(nm,nd); }
-      if(w>nd.wait) nd.wait=w;
-      if(nd.cat==="input" && cat!=="input") nd.cat=cat;        // prefer a terminal category
-      if(i>0){ const f=ch.hops[i-1][0], k=f+""+nm; edges.set(k, Math.max(edges.get(k)||0, ch.hops[i-1][1])); }
-    }
-  }
-  if(GRAPH_FILTER){                             // subtree focus: keep only selected nodes + their edges
-    for(const n of [...nodes.keys()]) if(!GRAPH_FILTER.has(n)) nodes.delete(n);
-    for(const k of [...edges.keys()]){ const s=k.split(""); if(!GRAPH_FILTER.has(s[0])||!GRAPH_FILTER.has(s[1])) edges.delete(k); }
-  }
-  const preds=new Map();
-  for(const k of edges.keys()){ const [f,t]=k.split(""); pushMap(preds,t,f); }
-  const succ=new Map(); for(const [t,fs] of preds) for(const f of fs) pushMap(succ,f,t);
-  const layer=new Map();
-  function L(n,guard){ if(layer.has(n)) return layer.get(n); if(guard.has(n)) return 0; guard.add(n);
-    let m=0; for(const p of (preds.get(n)||[])) m=Math.max(m, L(p,guard)+1); layer.set(n,m); return m; }
-  for(const n of nodes.keys()) L(n,new Set());
-  const cols=new Map(); let maxLayer=0;
-  for(const [n,l] of layer){ pushMap(cols,l,n); if(l>maxLayer) maxLayer=l; }
-  const NW=GNODE_W,NH=GNODE_H,COLW=232,ROWH=66,PADX=16,PADY=16;
-  for(let l=0;l<=maxLayer;l++) (cols.get(l)||[]).sort((a,b)=>nodes.get(b).wait-nodes.get(a).wait);   // init order (by wait)
-  const order = planarOrder(cols,maxLayer,preds,succ);
-  const yy = assignY(order,maxLayer,preds,succ,ROWH);
-  const pos=new Map();
-  for(let l=0;l<=maxLayer;l++) order.get(l).forEach(n=>pos.set(n,{x:PADX+l*COLW, y:PADY+yy.get(n)}));
-  if(LAYOUT==="custom"){ for(const n of nodes.keys()){ const c=CUSTOM_POS[n]; if(c) pos.set(n,{x:c[0],y:c[1]}); } }
-  let W=0,H=0; for(const p of pos.values()){ if(p.x+NW>W) W=p.x+NW; if(p.y+NH>H) H=p.y+NH; } W+=PADX; H+=PADY;
-  let maxEW=0.001; for(const w of edges.values()) if(w>maxEW) maxEW=w;
-  let s=`<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role=img aria-label="Backpressure chain graph">`;
-  // no arrowheads: direction is implicit (downstream on the left, roots on the right)
-  for(const [k,w] of edges){ const [f,t]=k.split(""); const a=pos.get(f),b=pos.get(t); if(!a||!b) continue;
-    const x1=a.x+NW, y1=a.y+NH/2, x2=b.x, y2=b.y+NH/2;
-    const sw=(1.2+5*(w/maxEW)).toFixed(1);
-    s+=`<path class=gedge data-from="${esc(f)}" data-to="${esc(t)}" d="${gedgeD(x1,y1,x2,y2)}" fill=none stroke="${edgeColor(w/maxEW)}" stroke-opacity="0.85" stroke-width=${sw}><title>${esc(f)} → ${esc(t)}: ${w.toFixed(2)}s</title></path>`; }
-  for(const [n,nd] of nodes){ const p=pos.get(n), hex=catHex(nd.cat); const disp=n.length>24?n.slice(0,23)+"…":n;
-    s+=`<g class=gnode data-node="${esc(n)}" data-x="${p.x}" data-y="${p.y}" transform="translate(${p.x},${p.y})">`
-     + `<title>${esc(n)} — ${esc(nd.cat)} — ${nd.wait.toFixed(2)}s (drag to move)</title>`
-     + `<rect x=0 y=0 width=${NW} height=${NH} rx=8 fill="${hex}22" stroke="${hex}" stroke-opacity="0.75"/>`
-     + `<text class=nt x=11 y=18 font-size=12>${esc(disp)}</text>`
-     + `<text class=ns x=11 y=34 font-size=11>${esc(nd.cat)} · ${nd.wait.toFixed(2)}s</text></g>`; }
-  s+="</svg>";
-  return s;
-}
+        out.push("<h2>Await roots — where each chain bottoms out</h2>");
+        out.push(
+          "<p class=sub>Each actor’s current wait, traced upstream (most-stuck branch) to the span it ultimately blocks on.</p>",
+        );
+        out.push(
+          info(
+            "An await-tree span’s duration is just how long that future has been awaiting — it is <b>not</b> by itself “backpressure”. Following each actor upstream (most-stuck branch) to a span it can’t blame on another actor gives its root: " +
+              "<b>Source</b> = awaiting ingestion — the ambiguous one: it can be genuine backpressure <em>or</em> simply an idle source with no new upstream data (the tree alone can’t distinguish — corroborate with source throughput &amp; barrier latency); " +
+              "<b>wait_pending_fetch_block</b> = reading state from S3 / the block cache; " +
+              "<b>receive_barrier</b> = waiting for the next checkpoint barrier (usually normal propagation); " +
+              "<b>Wait For New Buffer Item</b> = a sink with nothing to send; " +
+              "<b>UpstreamSinkUnion</b> = reading a base table fed by an upstream source/sink. " +
+              "A high <b>Source</b> share means ingestion-bound — confirm data is actually flowing before calling it backpressure.",
+          ),
+        );
+        out.push(
+          "<table><thead><tr><th>Root await</th><th class=num>Actors</th><th>Share</th></tr></thead><tbody>" +
+            data.root_split.map(([l, c]) => barRow(l, c, total)).join("") +
+            "</tbody></table>",
+        );
 
-function renderReport(data){
-  const total=data.total_actors;
-  if (!total) return "<p>No actors parsed. If this is a dump with a non-standard format, check the console.</p>";
-  const s=data.wait_stats; const out=[];
-  const cards=[["Actors",nf(total)],["Epoch-wait median",s.median.toFixed(2)+"s"],
-    ["p99",s.p99.toFixed(2)+"s"],["max",s.max.toFixed(2)+"s"],["Actors ≥ 5s",nf(data.stuck_count)]];
-  out.push('<div class=cards>'+cards.map(([k,v])=>`<div class=card><div class=k>${k}</div><div class=v>${v}</div></div>`).join("")+'</div>');
+        out.push("<h2>Longest await chains</h2>");
+        out.push(
+          info(
+            "A graph of the chains with the longest waits. Each <b>node</b> is a pipeline; an <b>edge</b> connects a downstream pipeline to the upstream one it awaits — downstream on the left, roots on the right. <b>Thicker, warmer (amber→red) edges</b> mark longer waits. Root nodes on the right are where each chain bottoms out, coloured by what they await; <b>fan-in</b> onto one node marks a shared upstream. The <b>Planar</b> layout minimises crossing edges; <b>drag</b> a node to rearrange it (switches to Custom); <b>double-click</b> a node to focus its connected subtree, then “show all nodes” to reset. Hover a node/edge for exact values.",
+          ),
+        );
+        out.push(
+          "<div class=graphbar><label>Layout <select id=glayout>" +
+            "<option value=planar" +
+            (LAYOUT !== "custom" ? " selected" : "") +
+            ">Planar</option>" +
+            "<option value=custom disabled" +
+            (LAYOUT === "custom" ? " selected" : "") +
+            ">Custom</option>" +
+            "</select></label>" +
+            (GRAPH_FILTER ? " <button id=gfilterclear>show all nodes</button>" : "") +
+            "</div>",
+        );
+        out.push("<div class=graphwrap>" + graphSvg(data.chains, SHOWN.graph) + "</div>");
+        out.push(moreBtn("graph", data.chains.length));
+        out.push(
+          "<div class=glegend>" +
+            '<i><span class=sw style="background:#e0a13c"></span>Source</i>' +
+            '<i><span class=sw style="background:#9b8cf0"></span>UpstreamSinkUnion</i>' +
+            '<i><span class=sw style="background:#5aa0e0"></span>receive_barrier</i>' +
+            '<i><span class=sw style="background:#e05a5a"></span>storage fetch</i>' +
+            '<i><span class=sw style="background:#3fb8a0"></span>starved sink</i>' +
+            '<i><span class=sw style="background:#6b7280"></span>waiting on input</i>' +
+            '<i style="margin-left:auto"><span class=sw style="width:34px;background:linear-gradient(90deg,#3fb8a0,#e0a13c,#e05a5a)"></span>edge = wait time (low→high)</i></div>',
+        );
 
-  out.push("<h2>Await roots — where each chain bottoms out</h2>");
-  out.push('<p class=sub>Each actor’s current wait, traced upstream (most-stuck branch) to the span it ultimately blocks on.</p>');
-  out.push(info("An await-tree span’s duration is just how long that future has been awaiting — it is <b>not</b> by itself “backpressure”. Following each actor upstream (most-stuck branch) to a span it can’t blame on another actor gives its root: "
-    + "<b>Source</b> = awaiting ingestion — the ambiguous one: it can be genuine backpressure <em>or</em> simply an idle source with no new upstream data (the tree alone can’t distinguish — corroborate with source throughput &amp; barrier latency); "
-    + "<b>wait_pending_fetch_block</b> = reading state from S3 / the block cache; "
-    + "<b>receive_barrier</b> = waiting for the next checkpoint barrier (usually normal propagation); "
-    + "<b>Wait For New Buffer Item</b> = a sink with nothing to send; "
-    + "<b>UpstreamSinkUnion</b> = reading a base table fed by an upstream source/sink. "
-    + "A high <b>Source</b> share means ingestion-bound — confirm data is actually flowing before calling it backpressure."));
-  out.push("<table><thead><tr><th>Root await</th><th class=num>Actors</th><th>Share</th></tr></thead><tbody>"
-    + data.root_split.map(([l,c])=>barRow(l,c,total)).join("")+"</tbody></table>");
+        out.push("<h2>Worst chain per pipeline (downstream → upstream root)</h2>");
+        out.push(
+          info(
+            "For each of the slowest pipelines, its single most-stuck path traced to the root, with the wait at each hop. Read top→bottom: the first line is the slow pipeline; indented lines are successively further upstream. The badge shows what each hop is blocked on. Where the chain bottoms out is the cause — <b>Source/UpstreamSinkUnion</b> = ingestion, <b>wait_pending_fetch_block</b> = storage. Caveat: when the dump is off-peak (all waits near one barrier interval) the branch chosen at each tie is heuristic — trust the aggregate root split above more than any single path.",
+          ),
+        );
+        for (const ch of data.chains.slice(0, SHOWN.chains)) {
+          out.push(
+            "<div class=chain><div class=title><span class=mono>" +
+              esc(ch.pipeline) +
+              "</span>" +
+              `<span class=meta>max ${ch.max_wait.toFixed(2)}s · ${nf(ch.actor_count)} actors</span></div>`,
+          );
+          ch.hops.forEach(([nm, wait, cat], depth) => {
+            const arm = "&nbsp;&nbsp;".repeat(depth) + (depth ? "↳ " : "");
+            out.push(
+              `<div class=hop><span class=arm>${arm}</span><span class=pn>${esc(nm)}</span> ${badge(cat)}<span class=w>${wait.toFixed(2)}s</span></div>`,
+            );
+          });
+          out.push("</div>");
+        }
 
-  out.push("<h2>Longest await chains</h2>");
-  out.push(info("A graph of the chains with the longest waits. Each <b>node</b> is a pipeline; an <b>edge</b> connects a downstream pipeline to the upstream one it awaits — downstream on the left, roots on the right. <b>Thicker, warmer (amber→red) edges</b> mark longer waits. Root nodes on the right are where each chain bottoms out, coloured by what they await; <b>fan-in</b> onto one node marks a shared upstream. The <b>Planar</b> layout minimises crossing edges; <b>drag</b> a node to rearrange it (switches to Custom); <b>double-click</b> a node to focus its connected subtree, then “show all nodes” to reset. Hover a node/edge for exact values."));
-  out.push('<div class=graphbar><label>Layout <select id=glayout>'
-    + '<option value=planar'+(LAYOUT!=="custom"?" selected":"")+'>Planar</option>'
-    + '<option value=custom disabled'+(LAYOUT==="custom"?" selected":"")+'>Custom</option>'
-    + '</select></label>'
-    + (GRAPH_FILTER?' <button id=gfilterclear>show all nodes</button>':'')
-    + '</div>');
-  out.push('<div class=graphwrap>'+graphSvg(data.chains, SHOWN.graph)+'</div>');
-  out.push(moreBtn("graph", data.chains.length));
-  out.push('<div class=glegend>'
-    + '<i><span class=sw style="background:#e0a13c"></span>Source</i>'
-    + '<i><span class=sw style="background:#9b8cf0"></span>UpstreamSinkUnion</i>'
-    + '<i><span class=sw style="background:#5aa0e0"></span>receive_barrier</i>'
-    + '<i><span class=sw style="background:#e05a5a"></span>storage fetch</i>'
-    + '<i><span class=sw style="background:#3fb8a0"></span>starved sink</i>'
-    + '<i><span class=sw style="background:#6b7280"></span>waiting on input</i>'
-    + '<i style="margin-left:auto"><span class=sw style="width:34px;background:linear-gradient(90deg,#3fb8a0,#e0a13c,#e05a5a)"></span>edge = wait time (low→high)</i></div>');
+        out.push(moreBtn("chains", data.chains.length));
 
-  out.push("<h2>Worst chain per pipeline (downstream → upstream root)</h2>");
-  out.push(info("For each of the slowest pipelines, its single most-stuck path traced to the root, with the wait at each hop. Read top→bottom: the first line is the slow pipeline; indented lines are successively further upstream. The badge shows what each hop is blocked on. Where the chain bottoms out is the cause — <b>Source/UpstreamSinkUnion</b> = ingestion, <b>wait_pending_fetch_block</b> = storage. Caveat: when the dump is off-peak (all waits near one barrier interval) the branch chosen at each tie is heuristic — trust the aggregate root split above more than any single path."));
-  for (const ch of data.chains.slice(0, SHOWN.chains)){
-    out.push('<div class=chain><div class=title><span class=mono>'+esc(ch.pipeline)+'</span>'
-      +`<span class=meta>max ${ch.max_wait.toFixed(2)}s · ${nf(ch.actor_count)} actors</span></div>`);
-    ch.hops.forEach(([nm,wait,cat],depth)=>{
-      const arm=("&nbsp;&nbsp;".repeat(depth))+(depth?"↳ ":"");
-      out.push(`<div class=hop><span class=arm>${arm}</span><span class=pn>${esc(nm)}</span> ${badge(cat)}<span class=w>${wait.toFixed(2)}s</span></div>`);
-    });
-    out.push("</div>");
-  }
+        out.push("<h2>Epoch-wait distribution</h2>");
+        out.push(
+          info(
+            "How long actors have been in their current step. At rest this is bounded by the barrier interval (~1s), so a healthy cluster sits in the <b>0–1s</b> buckets. Actors in the <b>5s+</b> buckets indicate a real freeze or heavy backpressure. If everything is ≤~1–2s, the dump was taken off-peak and won't show the incident's worst moment — recapture while latency is climbing.",
+          ),
+        );
+        out.push(
+          "<table><thead><tr><th>Bucket</th><th class=num>Actors</th><th>Share</th></tr></thead><tbody>" +
+            data.distribution.map(([l, c]) => barRow(l, c, total)).join("") +
+            "</tbody></table>",
+        );
 
-  out.push(moreBtn("chains", data.chains.length));
+        out.push("<h2>Pipelines by max epoch-wait</h2>");
+        out.push(
+          info(
+            "Each streaming job (materialized view, index, or sink), ranked by its slowest actor. A high <b>max</b> with a low <b>median</b> means one straggler actor — data skew or a hot key; a high <b>median</b> means the whole job is slow. <b>actors</b> is that job's parallelism.",
+          ),
+        );
+        out.push(
+          tableHTML(
+            "pipelines",
+            [
+              { label: "Pipeline", type: "text", cls: "mono", get: (r) => r[3] },
+              { label: "max", type: "num", get: (r) => r[0], cell: (r) => `<td class=num>${r[0].toFixed(2)}s</td>` },
+              { label: "median", type: "num", get: (r) => r[1], cell: (r) => `<td class=num>${r[1].toFixed(2)}s</td>` },
+              { label: "actors", type: "num", get: (r) => r[2], cell: (r) => `<td class=num>${nf(r[2])}</td>` },
+            ],
+            data.pipelines,
+          ),
+        );
 
-  out.push("<h2>Epoch-wait distribution</h2>");
-  out.push(info("How long actors have been in their current step. At rest this is bounded by the barrier interval (~1s), so a healthy cluster sits in the <b>0–1s</b> buckets. Actors in the <b>5s+</b> buckets indicate a real freeze or heavy backpressure. If everything is ≤~1–2s, the dump was taken off-peak and won't show the incident's worst moment — recapture while latency is climbing."));
-  out.push("<table><thead><tr><th>Bucket</th><th class=num>Actors</th><th>Share</th></tr></thead><tbody>"
-    + data.distribution.map(([l,c])=>barRow(l,c,total)).join("")+"</tbody></table>");
+        out.push("<h2>Primary await-point (all actors)</h2>");
+        out.push(
+          info(
+            "What actors are <b>directly</b> blocked on right now (one hop — not traced to root). <b>RemoteInput/LocalInput</b> = waiting for data from an upstream actor (normal idling or backpressure); <b>Source</b> = ingestion; <b>Wait For New Buffer Item</b> = a starved sink; <b>receive_barrier</b> = awaiting the barrier. Lots of input-waiting is expected — the roots section above is what tells you the underlying cause.",
+          ),
+        );
+        out.push(
+          tableHTML(
+            "awaits",
+            [
+              { label: "Await point", type: "text", get: (r) => r[0] },
+              { label: "Actors", type: "num", get: (r) => r[1], cell: (r) => `<td class=num>${nf(r[1])}</td>` },
+              {
+                label: "Share",
+                type: "num",
+                get: (r) => r[1],
+                cell: (r) => {
+                  const p = (r[1] / total) * 100;
+                  return `<td style="width:55%"><div class=barcell><span style="width:${p.toFixed(1)}%"></span><em>${p.toFixed(1)}%</em></div></td>`;
+                },
+              },
+            ],
+            data.await_points,
+          ),
+        );
 
-  out.push("<h2>Pipelines by max epoch-wait</h2>");
-  out.push(info("Each streaming job (materialized view, index, or sink), ranked by its slowest actor. A high <b>max</b> with a low <b>median</b> means one straggler actor — data skew or a hot key; a high <b>median</b> means the whole job is slow. <b>actors</b> is that job's parallelism."));
-  out.push(tableHTML("pipelines", [
-    {label:"Pipeline", type:"text", cls:"mono", get:r=>r[3]},
-    {label:"max",      type:"num", get:r=>r[0], cell:r=>`<td class=num>${r[0].toFixed(2)}s</td>`},
-    {label:"median",   type:"num", get:r=>r[1], cell:r=>`<td class=num>${r[1].toFixed(2)}s</td>`},
-    {label:"actors",   type:"num", get:r=>r[2], cell:r=>`<td class=num>${nf(r[2])}</td>`},
-  ], data.pipelines));
+        out.push("<h2>Slowest individual actors</h2>");
+        out.push(
+          info(
+            "The individual actors with the longest epoch wait and what each is blocked on. Useful for telling a single hot actor (data skew) apart from a whole pipeline being slow — if one actor dominates while its siblings are fast, you have skew on that operator's key.",
+          ),
+        );
+        out.push(
+          tableHTML(
+            "actors",
+            [
+              { label: "wait", type: "num", get: (r) => r[0], cell: (r) => `<td class=num>${r[0].toFixed(2)}s</td>` },
+              { label: "actor", type: "num", get: (r) => r[1], cell: (r) => `<td class=num>${r[1]}</td>` },
+              { label: "pipeline", type: "text", cls: "mono", get: (r) => r[2] },
+              {
+                label: "await",
+                type: "text",
+                get: (r) => normaliseCategory(r[3]),
+                cell: (r) => `<td>${badge(normaliseCategory(r[3]))}</td>`,
+              },
+            ],
+            data.top_actors,
+          ),
+        );
 
-  out.push("<h2>Primary await-point (all actors)</h2>");
-  out.push(info("What actors are <b>directly</b> blocked on right now (one hop — not traced to root). <b>RemoteInput/LocalInput</b> = waiting for data from an upstream actor (normal idling or backpressure); <b>Source</b> = ingestion; <b>Wait For New Buffer Item</b> = a starved sink; <b>receive_barrier</b> = awaiting the barrier. Lots of input-waiting is expected — the roots section above is what tells you the underlying cause."));
-  out.push(tableHTML("awaits", [
-    {label:"Await point", type:"text", get:r=>r[0]},
-    {label:"Actors",      type:"num", get:r=>r[1], cell:r=>`<td class=num>${nf(r[1])}</td>`},
-    {label:"Share",       type:"num", get:r=>r[1], cell:r=>{const p=r[1]/total*100;
-       return `<td style="width:55%"><div class=barcell><span style="width:${p.toFixed(1)}%"></span><em>${p.toFixed(1)}%</em></div></td>`;}},
-  ], data.await_points));
+        if (data.jvm) {
+          const j = data.jvm;
+          out.push("<h2>JVM connector-node thread dump</h2>");
+          out.push(
+            info(
+              "The embedded connector node runs CDC sources and JDBC/other sinks on the JVM. <b>RUNNABLE</b> threads sitting in socket reads (e.g. MongoDB <code>SocketStream.read</code>) mean it is actively pulling/pushing — a busy connector here can itself be the ingestion limiter. <b>BLOCKED</b> threads indicate lock contention. The thread-group table shows which connectors are active and how many threads each uses.",
+            ),
+          );
+          out.push(
+            `<p class=sub>${nf(j.total)} threads · ` +
+              j.states.map(([st, c]) => `<span class=pill>${esc(st)} ${c}</span>`).join("") +
+              "</p>",
+          );
+          out.push(
+            tableHTML(
+              "jvmGroups",
+              [
+                { label: "Thread group", type: "text", cls: "mono", get: (r) => r[0] },
+                { label: "Count", type: "num", get: (r) => r[1], cell: (r) => `<td class=num>${r[1]}</td>` },
+              ],
+              j.groups,
+            ),
+          );
+          if (j.runnable.length) {
+            out.push("<h2>RUNNABLE threads — representative frame</h2>");
+            out.push(
+              tableHTML(
+                "jvmRun",
+                [
+                  { label: "Frame", type: "text", cls: "mono", get: (r) => r[0] },
+                  { label: "Count", type: "num", get: (r) => r[1], cell: (r) => `<td class=num>${r[1]}</td>` },
+                ],
+                j.runnable,
+              ),
+            );
+          }
+          out.push(`<p class=note>Lock-contended (BLOCKED) threads: ${j.blocked}</p>`);
+        }
+        out.push(
+          "<p class=note>All " +
+            nf(total) +
+            " actors in the file were parsed and analysed. “Show more” only changes how many rows are shown — it never limits the analysis. Chain roots follow the most-stuck upstream branch at each hop — robust for the aggregate split, heuristic for any single path when the dump is off-peak.</p>",
+        );
+        return out.join("");
+      }
 
-  out.push("<h2>Slowest individual actors</h2>");
-  out.push(info("The individual actors with the longest epoch wait and what each is blocked on. Useful for telling a single hot actor (data skew) apart from a whole pipeline being slow — if one actor dominates while its siblings are fast, you have skew on that operator's key."));
-  out.push(tableHTML("actors", [
-    {label:"wait",     type:"num",  get:r=>r[0], cell:r=>`<td class=num>${r[0].toFixed(2)}s</td>`},
-    {label:"actor",    type:"num",  get:r=>r[1], cell:r=>`<td class=num>${r[1]}</td>`},
-    {label:"pipeline", type:"text", cls:"mono", get:r=>r[2]},
-    {label:"await",    type:"text", get:r=>normaliseCategory(r[3]), cell:r=>`<td>${badge(normaliseCategory(r[3]))}</td>`},
-  ], data.top_actors));
+      // ===================================================================== //
+      // App wiring: load (drop / paste / click) -> parse -> render            //
+      // ===================================================================== //
+      const $ = (id) => document.getElementById(id);
+      const loaderEl = $("loader"),
+        reportEl = $("report"),
+        dropEl = $("drop"),
+        fileEl = $("file"),
+        errEl = $("err");
+      let STATE = null; // {actors, jvm, source, prefix}
 
-  if (data.jvm){
-    const j=data.jvm;
-    out.push("<h2>JVM connector-node thread dump</h2>");
-    out.push(info("The embedded connector node runs CDC sources and JDBC/other sinks on the JVM. <b>RUNNABLE</b> threads sitting in socket reads (e.g. MongoDB <code>SocketStream.read</code>) mean it is actively pulling/pushing — a busy connector here can itself be the ingestion limiter. <b>BLOCKED</b> threads indicate lock contention. The thread-group table shows which connectors are active and how many threads each uses."));
-    out.push(`<p class=sub>${nf(j.total)} threads · `+j.states.map(([st,c])=>`<span class=pill>${esc(st)} ${c}</span>`).join("")+"</p>");
-    out.push(tableHTML("jvmGroups", [
-      {label:"Thread group", type:"text", cls:"mono", get:r=>r[0]},
-      {label:"Count",        type:"num", get:r=>r[1], cell:r=>`<td class=num>${r[1]}</td>`},
-    ], j.groups));
-    if (j.runnable.length){
-      out.push("<h2>RUNNABLE threads — representative frame</h2>");
-      out.push(tableHTML("jvmRun", [
-        {label:"Frame", type:"text", cls:"mono", get:r=>r[0]},
-        {label:"Count", type:"num", get:r=>r[1], cell:r=>`<td class=num>${r[1]}</td>`},
-      ], j.runnable));
-    }
-    out.push(`<p class=note>Lock-contended (BLOCKED) threads: ${j.blocked}</p>`);
-  }
-  out.push('<p class=note>All '+nf(total)+' actors in the file were parsed and analysed. “Show more” only changes how many rows are shown — it never limits the analysis. Chain roots follow the most-stuck upstream branch at each hop — robust for the aggregate split, heuristic for any single path when the dump is off-peak.</p>');
-  return out.join("");
-}
+      function setError(msg) {
+        errEl.textContent = msg || "";
+      }
 
-// ===================================================================== //
-// App wiring: load (drop / paste / click) -> parse -> render            //
-// ===================================================================== //
-const $ = id => document.getElementById(id);
-const loaderEl=$("loader"), reportEl=$("report"), dropEl=$("drop"), fileEl=$("file"), errEl=$("err");
-let STATE=null;   // {actors, jvm, source, prefix}
+      // ---- progress UI ----
+      const progEl = $("prog"),
+        pfill = $("pfill"),
+        plabel = $("plabel"),
+        pname = $("pname");
+      function showProgress(name) {
+        setError("");
+        dropEl.style.display = "none";
+        progEl.hidden = false;
+        pname.textContent = name;
+        setProg(0, "Reading…");
+      }
+      function hideProgress() {
+        progEl.hidden = true;
+        dropEl.style.display = "";
+      }
+      function setProg(frac, label) {
+        const p = Math.max(0, Math.min(1, frac));
+        pfill.style.width = (p * 100).toFixed(0) + "%";
+        if (label != null) plabel.textContent = label + " " + (p * 100).toFixed(0) + "%";
+      }
 
-function setError(msg){ errEl.textContent = msg||""; }
+      // Parse + analyse the ENTIRE file. Async only so the progress bar can update; no sampling.
+      async function runPipeline(text, source) {
+        try {
+          if (progEl.hidden) showProgress(source);
+          setProg(0.28, "Preparing…");
+          await tick();
+          let lines = text.split(/\r?\n/);
+          const sp = stripUniformPrefix(lines);
+          lines = sp.lines;
+          const { tree, jvm } = splitSections(lines);
+          const actors = await parseActors(tree, (f) => setProg(0.3 + 0.35 * f, "Parsing actors…"));
+          await computeAll(actors, (f) => setProg(0.65 + 0.2 * f, "Analysing actors…"));
+          const jvmThreads = parseJvm(jvm);
+          if (!actors.length) {
+            hideProgress();
+            setError("0 actors parsed — is this an await-tree dump?");
+            return;
+          }
+          STATE = { actors, jvm: jvmThreads, source, prefix: sp.prefix };
+          setProg(0.9, "Building report…");
+          await tick();
+          recompute(); // analyses the full set, then renders
+          setProg(1, "Done");
+          hideProgress();
+          loaderEl.style.display = "none";
+          reportEl.style.display = "block";
+          reportEl.tabIndex = -1;
+          reportEl.focus({ preventScroll: true }); // keep paste working in report view
+        } catch (e) {
+          console.error(e);
+          hideProgress();
+          setError("Parse error: " + e.message);
+        }
+      }
 
-// ---- progress UI ----
-const progEl=$("prog"), pfill=$("pfill"), plabel=$("plabel"), pname=$("pname");
-function showProgress(name){ setError(""); dropEl.style.display="none"; progEl.hidden=false; pname.textContent=name; setProg(0,"Reading…"); }
-function hideProgress(){ progEl.hidden=true; dropEl.style.display=""; }
-function setProg(frac,label){ const p=Math.max(0,Math.min(1,frac)); pfill.style.width=(p*100).toFixed(0)+"%"; if(label!=null) plabel.textContent=label+" "+(p*100).toFixed(0)+"%"; }
+      function bannerHtml() {
+        return STATE && STATE.prefix
+          ? `<div class=banner>Detected and stripped a ${STATE.prefix}-character per-line prefix (e.g. log timestamps) before parsing.</div>`
+          : "";
+      }
+      function draw() {
+        const body = $("body");
+        const open = [...body.querySelectorAll("details.info")].map((d) => d.open); // preserve expanded info cards across re-render
+        const ae = document.activeElement; // preserve focus/caret in a filter box while typing
+        const af =
+          ae && ae.classList && ae.classList.contains("tfilter")
+            ? { sec: ae.dataset.sec, s: ae.selectionStart, e: ae.selectionEnd }
+            : null;
+        body.innerHTML = bannerHtml() + renderReport(STATE._data);
+        const ds = body.querySelectorAll("details.info");
+        open.forEach((o, i) => {
+          if (ds[i]) ds[i].open = o;
+        });
+        if (af) {
+          const inp = body.querySelector('.tfilter[data-sec="' + af.sec + '"]');
+          if (inp) {
+            inp.focus();
+            try {
+              inp.setSelectionRange(af.s, af.e);
+            } catch (_) {}
+          }
+        }
+        wireGraphDrag();
+      }
 
-// Parse + analyse the ENTIRE file. Async only so the progress bar can update; no sampling.
-async function runPipeline(text, source){
-  try{
-    if (progEl.hidden) showProgress(source);
-    setProg(0.28,"Preparing…"); await tick();
-    let lines = text.split(/\r?\n/);
-    const sp = stripUniformPrefix(lines); lines = sp.lines;
-    const {tree, jvm} = splitSections(lines);
-    const actors = await parseActors(tree, f=>setProg(0.30+0.35*f,"Parsing actors…"));
-    await computeAll(actors, f=>setProg(0.65+0.20*f,"Analysing actors…"));
-    const jvmThreads = parseJvm(jvm);
-    if (!actors.length){ hideProgress(); setError("0 actors parsed — is this an await-tree dump?"); return; }
-    STATE = {actors, jvm:jvmThreads, source, prefix:sp.prefix};
-    setProg(0.9,"Building report…"); await tick();
-    recompute();                          // analyses the full set, then renders
-    setProg(1,"Done"); hideProgress();
-    loaderEl.style.display="none"; reportEl.style.display="block";
-    reportEl.tabIndex=-1; reportEl.focus({preventScroll:true});   // keep paste working in report view
-  }catch(e){ console.error(e); hideProgress(); setError("Parse error: "+e.message); }
-}
+      // click-and-drag to reposition graph nodes; connected edges follow.
+      function wireGraphDrag() {
+        const svg = $("body").querySelector(".graphwrap svg");
+        if (!svg) return;
+        const nodeEls = {};
+        svg.querySelectorAll(".gnode").forEach((g) => (nodeEls[g.dataset.node] = g));
+        const edges = [...svg.querySelectorAll(".gedge")];
+        const toSvg = (e) => {
+          const m = svg.getScreenCTM();
+          const p = svg.createSVGPoint();
+          p.x = e.clientX;
+          p.y = e.clientY;
+          return m ? p.matrixTransform(m.inverse()) : { x: e.clientX, y: e.clientY };
+        };
+        const updEdge = (ed) => {
+          const a = nodeEls[ed.dataset.from],
+            b = nodeEls[ed.dataset.to];
+          if (!a || !b) return;
+          const ax = +a.dataset.x,
+            ay = +a.dataset.y,
+            bx = +b.dataset.x,
+            by = +b.dataset.y;
+          const x1 = ax + GNODE_W,
+            y1 = ay + GNODE_H / 2,
+            x2 = bx,
+            y2 = by + GNODE_H / 2;
+          ed.setAttribute("d", gedgeD(x1, y1, x2, y2));
+        };
+        let drag = null;
+        svg.addEventListener("pointerdown", (e) => {
+          const g = e.target.closest && e.target.closest(".gnode");
+          if (!g) return;
+          e.preventDefault();
+          const s = toSvg(e);
+          drag = { g, sx: s.x, sy: s.y, ox: +g.dataset.x, oy: +g.dataset.y, id: e.pointerId };
+          try {
+            svg.setPointerCapture(e.pointerId);
+          } catch (_) {}
+          g.parentNode.appendChild(g); // bring dragged node to front
+        });
+        svg.addEventListener("pointermove", (e) => {
+          if (!drag) return;
+          const s = toSvg(e);
+          if (!drag.moved) {
+            drag.moved = true; // first movement -> switch to Custom, snapshot current layout
+            if (LAYOUT !== "custom") {
+              CUSTOM_POS = {};
+              svg.querySelectorAll(".gnode").forEach((n) => {
+                CUSTOM_POS[n.dataset.node] = [+n.dataset.x, +n.dataset.y];
+              });
+              LAYOUT = "custom";
+            }
+          }
+          const nx = drag.ox + (s.x - drag.sx),
+            ny = drag.oy + (s.y - drag.sy);
+          drag.g.dataset.x = nx;
+          drag.g.dataset.y = ny;
+          drag.g.setAttribute("transform", `translate(${nx},${ny})`);
+          CUSTOM_POS[drag.g.dataset.node] = [nx, ny];
+          const nm = drag.g.dataset.node;
+          for (const ed of edges) if (ed.dataset.from === nm || ed.dataset.to === nm) updEdge(ed);
+        });
+        const end = () => {
+          if (!drag) return;
+          try {
+            svg.releasePointerCapture(drag.id);
+          } catch (_) {}
+          const moved = drag.moved;
+          drag = null;
+          if (moved) draw();
+        };
+        svg.addEventListener("pointerup", end);
+        svg.addEventListener("pointercancel", end);
+        // double-click a node -> focus its connected subtree (component), then re-layout
+        svg.addEventListener("dblclick", (e) => {
+          const g = e.target.closest && e.target.closest(".gnode");
+          if (!g) return;
+          e.preventDefault();
+          const adj = {};
+          const add = (a, b) => {
+            (adj[a] = adj[a] || []).push(b);
+          };
+          edges.forEach((ed) => {
+            add(ed.dataset.from, ed.dataset.to);
+            add(ed.dataset.to, ed.dataset.from);
+          });
+          const seen = new Set([g.dataset.node]),
+            q = [g.dataset.node];
+          while (q.length) {
+            const c = q.shift();
+            for (const nb of adj[c] || [])
+              if (!seen.has(nb)) {
+                seen.add(nb);
+                q.push(nb);
+              }
+          }
+          GRAPH_FILTER = seen;
+          LAYOUT = "planar";
+          CUSTOM_POS = {};
+          draw();
+        });
+      }
+      function recompute() {
+        if (!STATE) return;
+        STATE._data = analyse(STATE.actors, STATE.jvm, 15);
+        TABLE_STATE = {};
+        LAYOUT = "planar";
+        CUSTOM_POS = {};
+        GRAPH_FILTER = null; // reset sort/filter/layout for the new file
+        $("fn").textContent = STATE.source;
+        $("summary").textContent =
+          `${nf(STATE.actors.length)} actors · ${nf(STATE.jvm.length)} JVM threads` +
+          (STATE.prefix ? ` · stripped ${STATE.prefix}-char line prefix` : "");
+        resetShown();
+        draw();
+      }
 
-function bannerHtml(){ return (STATE && STATE.prefix)
-  ? `<div class=banner>Detected and stripped a ${STATE.prefix}-character per-line prefix (e.g. log timestamps) before parsing.</div>` : ""; }
-function draw(){
-  const body=$("body");
-  const open=[...body.querySelectorAll("details.info")].map(d=>d.open);   // preserve expanded info cards across re-render
-  const ae=document.activeElement;                                        // preserve focus/caret in a filter box while typing
-  const af=(ae && ae.classList && ae.classList.contains("tfilter")) ? {sec:ae.dataset.sec, s:ae.selectionStart, e:ae.selectionEnd} : null;
-  body.innerHTML = bannerHtml() + renderReport(STATE._data);
-  const ds=body.querySelectorAll("details.info"); open.forEach((o,i)=>{ if(ds[i]) ds[i].open=o; });
-  if(af){ const inp=body.querySelector('.tfilter[data-sec="'+af.sec+'"]'); if(inp){ inp.focus(); try{ inp.setSelectionRange(af.s,af.e); }catch(_){} } }
-  wireGraphDrag();
-}
+      function readFile(file) {
+        showProgress(file.name);
+        const r = new FileReader();
+        r.onprogress = (e) => {
+          if (e.lengthComputable) setProg(0.25 * (e.loaded / e.total), "Reading…");
+        };
+        r.onload = () => runPipeline(r.result, file.name);
+        r.onerror = () => {
+          hideProgress();
+          setError("Could not read file.");
+        };
+        r.readAsText(file);
+      }
 
-// click-and-drag to reposition graph nodes; connected edges follow.
-function wireGraphDrag(){
-  const svg=$("body").querySelector(".graphwrap svg"); if(!svg) return;
-  const nodeEls={}; svg.querySelectorAll(".gnode").forEach(g=>nodeEls[g.dataset.node]=g);
-  const edges=[...svg.querySelectorAll(".gedge")];
-  const toSvg=e=>{ const m=svg.getScreenCTM(); const p=svg.createSVGPoint(); p.x=e.clientX; p.y=e.clientY;
-    return m ? p.matrixTransform(m.inverse()) : {x:e.clientX,y:e.clientY}; };
-  const updEdge=ed=>{ const a=nodeEls[ed.dataset.from], b=nodeEls[ed.dataset.to]; if(!a||!b) return;
-    const ax=+a.dataset.x, ay=+a.dataset.y, bx=+b.dataset.x, by=+b.dataset.y;
-    const x1=ax+GNODE_W, y1=ay+GNODE_H/2, x2=bx, y2=by+GNODE_H/2;
-    ed.setAttribute("d", gedgeD(x1,y1,x2,y2)); };
-  let drag=null;
-  svg.addEventListener("pointerdown", e=>{
-    const g=e.target.closest && e.target.closest(".gnode"); if(!g) return;
-    e.preventDefault(); const s=toSvg(e);
-    drag={g, sx:s.x, sy:s.y, ox:+g.dataset.x, oy:+g.dataset.y, id:e.pointerId};
-    try{ svg.setPointerCapture(e.pointerId); }catch(_){}
-    g.parentNode.appendChild(g);   // bring dragged node to front
-  });
-  svg.addEventListener("pointermove", e=>{
-    if(!drag) return; const s=toSvg(e);
-    if(!drag.moved){ drag.moved=true;                    // first movement -> switch to Custom, snapshot current layout
-      if(LAYOUT!=="custom"){ CUSTOM_POS={}; svg.querySelectorAll(".gnode").forEach(n=>{ CUSTOM_POS[n.dataset.node]=[+n.dataset.x,+n.dataset.y]; }); LAYOUT="custom"; }
-    }
-    const nx=drag.ox+(s.x-drag.sx), ny=drag.oy+(s.y-drag.sy);
-    drag.g.dataset.x=nx; drag.g.dataset.y=ny; drag.g.setAttribute("transform",`translate(${nx},${ny})`);
-    CUSTOM_POS[drag.g.dataset.node]=[nx,ny];
-    const nm=drag.g.dataset.node;
-    for(const ed of edges) if(ed.dataset.from===nm || ed.dataset.to===nm) updEdge(ed);
-  });
-  const end=()=>{ if(!drag) return; try{ svg.releasePointerCapture(drag.id); }catch(_){} const moved=drag.moved; drag=null; if(moved) draw(); };
-  svg.addEventListener("pointerup", end);
-  svg.addEventListener("pointercancel", end);
-  // double-click a node -> focus its connected subtree (component), then re-layout
-  svg.addEventListener("dblclick", e=>{
-    const g=e.target.closest && e.target.closest(".gnode"); if(!g) return;
-    e.preventDefault();
-    const adj={}; const add=(a,b)=>{ (adj[a]=adj[a]||[]).push(b); };
-    edges.forEach(ed=>{ add(ed.dataset.from,ed.dataset.to); add(ed.dataset.to,ed.dataset.from); });
-    const seen=new Set([g.dataset.node]), q=[g.dataset.node];
-    while(q.length){ const c=q.shift(); for(const nb of (adj[c]||[])) if(!seen.has(nb)){ seen.add(nb); q.push(nb); } }
-    GRAPH_FILTER=seen; LAYOUT="planar"; CUSTOM_POS={}; draw();
-  });
-}
-function recompute(){
-  if (!STATE) return;
-  STATE._data = analyse(STATE.actors, STATE.jvm, 15);
-  TABLE_STATE={}; LAYOUT="planar"; CUSTOM_POS={}; GRAPH_FILTER=null;   // reset sort/filter/layout for the new file
-  $("fn").textContent = STATE.source;
-  $("summary").textContent = `${nf(STATE.actors.length)} actors · ${nf(STATE.jvm.length)} JVM threads`
-    + (STATE.prefix ? ` · stripped ${STATE.prefix}-char line prefix` : "");
-  resetShown(); draw();
-}
+      // fetch an await-tree dump straight from a RisingWave meta node (same call the dashboard makes)
+      function setMetaError(msg) {
+        $("metaerr").textContent = msg || "";
+        $("metaerr").style.display = msg ? "block" : "none";
+      }
+      async function loadFromMeta(hostport) {
+        hostport = (hostport || "").trim();
+        if (!hostport) {
+          setMetaError("Enter the meta node host:port.");
+          return;
+        }
+        setMetaError("");
+        const base = /^https?:\/\//.test(hostport) ? hostport : "http://" + hostport;
+        const url = base.replace(/\/+$/, "") + "/api/monitor/await_tree/"; // trailing slash required by the meta API
+        showProgress(hostport);
+        setProg(0.1, "Fetching await-tree…");
+        try {
+          const res = await fetch(url, { headers: { Accept: "application/json, text/plain, */*" } });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const raw = await res.text();
+          let text = raw;
+          try {
+            // meta API returns JSON; gather the tree text out of it
+            const j = JSON.parse(raw),
+              parts = [];
+            const walk = (v) => {
+              if (typeof v === "string") {
+                if (/Actor \d+:|\[\d[\d.]*(ms|s)\]/.test(v)) parts.push(v);
+              } else if (Array.isArray(v)) v.forEach(walk);
+              else if (v && typeof v === "object") Object.values(v).forEach(walk);
+            };
+            walk(j);
+            if (parts.length) text = parts.join("\n\n");
+          } catch (_) {}
+          runPipeline(text, hostport);
+        } catch (err) {
+          hideProgress();
+          setMetaError(
+            "Couldn’t fetch from " +
+              hostport +
+              " (" +
+              err.message +
+              "). The meta node may be unreachable, or the browser blocked it via CORS (cross-origin). If so, open the dump in the meta dashboard and paste it here.",
+          );
+        }
+      }
+      $("metaload").addEventListener("click", () => loadFromMeta($("metahost").value));
+      $("metahost").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") loadFromMeta($("metahost").value);
+      });
 
-function readFile(file){
-  showProgress(file.name);
-  const r=new FileReader();
-  r.onprogress = e=>{ if(e.lengthComputable) setProg(0.25*(e.loaded/e.total),"Reading…"); };
-  r.onload = ()=>runPipeline(r.result, file.name);
-  r.onerror = ()=>{ hideProgress(); setError("Could not read file."); };
-  r.readAsText(file);
-}
+      // click / keyboard
+      dropEl.addEventListener("click", () => fileEl.click());
+      dropEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") fileEl.click();
+      });
+      fileEl.addEventListener("change", () => {
+        if (fileEl.files[0]) readFile(fileEl.files[0]);
+      });
 
-// fetch an await-tree dump straight from a RisingWave meta node (same call the dashboard makes)
-function setMetaError(msg){ $("metaerr").textContent = msg||""; $("metaerr").style.display = msg?"block":"none"; }
-async function loadFromMeta(hostport){
-  hostport=(hostport||"").trim(); if(!hostport){ setMetaError("Enter the meta node host:port."); return; }
-  setMetaError("");
-  const base = /^https?:\/\//.test(hostport) ? hostport : ("http://"+hostport);
-  const url = base.replace(/\/+$/,"") + "/api/monitor/await_tree/";   // trailing slash required by the meta API
-  showProgress(hostport); setProg(0.1,"Fetching await-tree…");
-  try{
-    const res = await fetch(url, {headers:{Accept:"application/json, text/plain, */*"}});
-    if(!res.ok) throw new Error("HTTP "+res.status);
-    const raw = await res.text();
-    let text = raw;
-    try{                                   // meta API returns JSON; gather the tree text out of it
-      const j = JSON.parse(raw), parts=[];
-      const walk=v=>{ if(typeof v==="string"){ if(/Actor \d+:|\[\d[\d.]*(ms|s)\]/.test(v)) parts.push(v); }
-        else if(Array.isArray(v)) v.forEach(walk); else if(v&&typeof v==="object") Object.values(v).forEach(walk); };
-      walk(j); if(parts.length) text = parts.join("\n\n");
-    }catch(_){}
-    runPipeline(text, hostport);
-  }catch(err){
-    hideProgress();
-    setMetaError("Couldn’t fetch from "+hostport+" ("+err.message+"). The meta node may be unreachable, or the browser blocked it via CORS (cross-origin). If so, open the dump in the meta dashboard and paste it here.");
-  }
-}
-$("metaload").addEventListener("click", ()=>loadFromMeta($("metahost").value));
-$("metahost").addEventListener("keydown", e=>{ if(e.key==="Enter") loadFromMeta($("metahost").value); });
+      // drag & drop (whole window)
+      ["dragenter", "dragover"].forEach((ev) =>
+        window.addEventListener(ev, (e) => {
+          e.preventDefault();
+          dropEl.classList.add("hot");
+        }),
+      );
+      ["dragleave", "dragend"].forEach((ev) =>
+        window.addEventListener(ev, (e) => {
+          if (e.relatedTarget === null) dropEl.classList.remove("hot");
+        }),
+      );
+      window.addEventListener("drop", (e) => {
+        e.preventDefault();
+        dropEl.classList.remove("hot");
+        const dt = e.dataTransfer;
+        if (!dt) return;
+        if (dt.files && dt.files.length) {
+          readFile(dt.files[0]);
+          return;
+        }
+        const t = dt.getData("text");
+        if (t && t.trim()) runPipeline(t, "dropped text");
+      });
 
-// click / keyboard
-dropEl.addEventListener("click", ()=>fileEl.click());
-dropEl.addEventListener("keydown", e=>{ if(e.key==="Enter"||e.key===" ") fileEl.click(); });
-fileEl.addEventListener("change", ()=>{ if(fileEl.files[0]) readFile(fileEl.files[0]); });
+      // paste anywhere, regardless of focus (file or raw text)
+      document.addEventListener("paste", (e) => {
+        const cd = e.clipboardData;
+        if (!cd) return;
+        if (cd.files && cd.files.length) {
+          e.preventDefault();
+          readFile(cd.files[0]);
+          return;
+        }
+        const t = cd.getData("text/plain");
+        if (t && t.trim()) {
+          e.preventDefault();
+          runPipeline(t, "pasted");
+        }
+      });
 
-// drag & drop (whole window)
-["dragenter","dragover"].forEach(ev=>window.addEventListener(ev,e=>{ e.preventDefault(); dropEl.classList.add("hot"); }));
-["dragleave","dragend"].forEach(ev=>window.addEventListener(ev,e=>{ if(e.relatedTarget===null) dropEl.classList.remove("hot"); }));
-window.addEventListener("drop", e=>{
-  e.preventDefault(); dropEl.classList.remove("hot");
-  const dt=e.dataTransfer; if(!dt) return;
-  if (dt.files && dt.files.length){ readFile(dt.files[0]); return; }
-  const t = dt.getData("text"); if (t && t.trim()) runPipeline(t,"dropped text");
-});
+      // report controls
+      $("body").addEventListener("click", (e) => {
+        if (!e.target.closest) return;
+        if (e.target.id === "gfilterclear") {
+          GRAPH_FILTER = null;
+          draw();
+          return;
+        }
+        const more = e.target.closest(".more");
+        if (more) {
+          const sec = more.dataset.sec,
+            cfg = SECTION_CFG[sec] || { step: 10 };
+          SHOWN[sec] = (SHOWN[sec] || 0) + cfg.step;
+          if (sec === "graph") {
+            LAYOUT = "planar";
+            CUSTOM_POS = {};
+            GRAPH_FILTER = null;
+          } // node set changed -> re-layout cleanly (fixes custom overlap)
+          draw();
+          return;
+        }
+        const th = e.target.closest(".th-sort");
+        if (th) {
+          const sec = th.dataset.sec,
+            col = +th.dataset.col,
+            st = tstate(sec);
+          if (st.sort === col) {
+            st.dir = -st.dir;
+          } else {
+            st.sort = col;
+            st.dir = -1;
+          }
+          draw();
+          return;
+        }
+      });
+      $("body").addEventListener("input", (e) => {
+        const inp = e.target.closest ? e.target.closest(".tfilter") : null;
+        if (!inp) return;
+        tstate(inp.dataset.sec).filter = inp.value;
+        draw();
+      });
+      $("body").addEventListener("change", (e) => {
+        if (e.target && e.target.id === "glayout") {
+          const v = e.target.value;
+          if (v !== "custom") {
+            LAYOUT = v;
+            CUSTOM_POS = {};
+            draw();
+          }
+        }
+      });
+      $("another").addEventListener("click", () => {
+        reportEl.style.display = "none";
+        loaderEl.style.display = "flex";
+        dropEl.querySelector(".big").textContent = "Drop a RisingWave await-tree dump here";
+        STATE = null;
+        fileEl.value = "";
+        dropEl.focus();
+      });
+      $("dljson").addEventListener("click", () => {
+        if (!STATE) return;
+        const blob = new Blob([JSON.stringify(toJson(STATE._data, STATE.source), null, 2)], {
+          type: "application/json",
+        });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = (STATE.source.replace(/\.[^.]*$/, "") || "await-tree") + ".json";
+        a.click();
+        URL.revokeObjectURL(a.href);
+      });
 
-// paste anywhere, regardless of focus (file or raw text)
-document.addEventListener("paste", e=>{
-  const cd=e.clipboardData; if(!cd) return;
-  if (cd.files && cd.files.length){ e.preventDefault(); readFile(cd.files[0]); return; }
-  const t = cd.getData("text/plain"); if (t && t.trim()){ e.preventDefault(); runPipeline(t,"pasted"); }
-});
+      // focus the loader on first load so paste works immediately
+      dropEl.focus();
 
-// report controls
-$("body").addEventListener("click", e=>{
-  if(!e.target.closest) return;
-  if(e.target.id==="gfilterclear"){ GRAPH_FILTER=null; draw(); return; }
-  const more=e.target.closest(".more");
-  if(more){ const sec=more.dataset.sec, cfg=SECTION_CFG[sec]||{step:10}; SHOWN[sec]=(SHOWN[sec]||0)+cfg.step;
-    if(sec==="graph"){ LAYOUT="planar"; CUSTOM_POS={}; GRAPH_FILTER=null; }   // node set changed -> re-layout cleanly (fixes custom overlap)
-    draw(); return; }
-  const th=e.target.closest(".th-sort");
-  if(th){ const sec=th.dataset.sec, col=+th.dataset.col, st=tstate(sec);
-    if(st.sort===col){ st.dir=-st.dir; } else { st.sort=col; st.dir=-1; }
-    draw(); return; }
-});
-$("body").addEventListener("input", e=>{
-  const inp=e.target.closest ? e.target.closest(".tfilter") : null; if(!inp) return;
-  tstate(inp.dataset.sec).filter = inp.value; draw();
-});
-$("body").addEventListener("change", e=>{
-  if(e.target && e.target.id==="glayout"){ const v=e.target.value; if(v!=="custom"){ LAYOUT=v; CUSTOM_POS={}; draw(); } }
-});
-$("another").addEventListener("click", ()=>{
-  reportEl.style.display="none"; loaderEl.style.display="flex";
-  dropEl.querySelector(".big").textContent="Drop a RisingWave await-tree dump here";
-  STATE=null; fileEl.value=""; dropEl.focus();
-});
-$("dljson").addEventListener("click", ()=>{
-  if (!STATE) return;
-  const blob=new Blob([JSON.stringify(toJson(STATE._data, STATE.source),null,2)],{type:"application/json"});
-  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
-  a.download=(STATE.source.replace(/\.[^.]*$/,"")||"await-tree")+".json"; a.click(); URL.revokeObjectURL(a.href);
-});
-
-// focus the loader on first load so paste works immediately
-dropEl.focus();
-
-// ?demo -> auto-load the bundled demo dump and open the report on page load
-if(new URLSearchParams(location.search).has("demo")){
-  showProgress("await_tree.demo.dump"); setProg(0.1,"Loading demo…");
-  fetch("https://raw.githubusercontent.com/Olian04/risingwave-await-tree-analyser/main/assets/await_tree.demo.dump")
-    .then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.text(); })
-    .then(t=>runPipeline(t, "await_tree.demo.dump"))
-    .catch(e=>{ hideProgress(); setError("Could not load demo dump: "+e.message); });
-}
-</script>
-</body>
+      // ?demo -> auto-load the bundled demo dump and open the report on page load
+      if (new URLSearchParams(location.search).has("demo")) {
+        showProgress("await_tree.demo.dump");
+        setProg(0.1, "Loading demo…");
+        fetch(
+          "https://raw.githubusercontent.com/Olian04/risingwave-await-tree-analyser/main/assets/await_tree.demo.dump",
+        )
+          .then((r) => {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.text();
+          })
+          .then((t) => runPipeline(t, "await_tree.demo.dump"))
+          .catch((e) => {
+            hideProgress();
+            setError("Could not load demo dump: " + e.message);
+          });
+      }
+    </script>
+  </body>
 </html>
