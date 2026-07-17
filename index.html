@@ -1679,6 +1679,25 @@
         }
         renderRecent();
       }
+      // A local "YYYY-MM-DD HH:MM:SS" stamp, appended to fetched sources so each fetch is a distinct entry
+      // (fetches otherwise share one name — e.g. the meta host — and would overwrite each other).
+      function fetchStamp() {
+        const d = new Date(),
+          p = (n) => String(n).padStart(2, "0");
+        return (
+          d.getFullYear() +
+          "-" +
+          p(d.getMonth() + 1) +
+          "-" +
+          p(d.getDate()) +
+          " " +
+          p(d.getHours()) +
+          ":" +
+          p(d.getMinutes()) +
+          ":" +
+          p(d.getSeconds())
+        );
+      }
       function relTime(ts) {
         const s = Math.max(0, (Date.now() - ts) / 1000);
         if (s < 60) return "just now";
@@ -1922,7 +1941,8 @@
         setMetaError("");
         const base = /^https?:\/\//.test(hostport) ? hostport : "http://" + hostport;
         const url = base.replace(/\/+$/, "") + "/api/monitor/await_tree/"; // trailing slash required by the meta API
-        showProgress(hostport);
+        const name = hostport + " @ " + fetchStamp(); // timestamped so repeated fetches don't overwrite each other
+        showProgress(name);
         setProg(0.1, "Fetching await-tree…");
         try {
           const res = await fetch(url, { headers: { Accept: "application/json, text/plain, */*" } });
@@ -1942,7 +1962,7 @@
             walk(j);
             if (parts.length) text = parts.join("\n\n");
           } catch (_) {}
-          runPipeline(text, hostport);
+          runPipeline(text, name);
         } catch (err) {
           hideProgress();
           setMetaError(
@@ -2092,7 +2112,8 @@
 
       // ?demo -> auto-load the bundled demo dump and open the report on page load
       if (new URLSearchParams(location.search).has("demo")) {
-        showProgress("await_tree.demo.dump");
+        const demoName = "await_tree.demo.dump @ " + fetchStamp();
+        showProgress(demoName);
         setProg(0.1, "Loading demo…");
         fetch(
           "https://raw.githubusercontent.com/Olian04/risingwave-await-tree-analyser/main/assets/await_tree.demo.dump",
@@ -2101,7 +2122,7 @@
             if (!r.ok) throw new Error("HTTP " + r.status);
             return r.text();
           })
-          .then((t) => runPipeline(t, "await_tree.demo.dump"))
+          .then((t) => runPipeline(t, demoName))
           .catch((e) => {
             hideProgress();
             setError("Could not load demo dump: " + e.message);
