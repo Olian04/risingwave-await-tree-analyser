@@ -89,6 +89,10 @@ details.info .ibody code{background:var(--panel);border:1px solid var(--bd);bord
 #body svg text{user-select:none;}
 #body svg .gnode{cursor:grab;touch-action:none;}
 #body svg .gnode:active{cursor:grabbing;}
+.graphbar{display:flex;align-items:center;gap:10px;margin:4px 0 8px;}
+.graphbar label{color:var(--mut);font-size:12.5px;display:flex;align-items:center;gap:6px;}
+.graphbar select{background:var(--panel);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:4px 8px;font:inherit;}
+.graphbar button{padding:4px 10px;}
 .glegend{display:flex;gap:14px;flex-wrap:wrap;color:var(--mut);font-size:12px;margin:8px 2px 0;}
 .glegend i{font-style:normal;display:inline-flex;align-items:center;gap:5px;}
 .glegend .sw{width:11px;height:11px;border-radius:3px;display:inline-block;}
@@ -415,6 +419,45 @@ function edgeColor(t){
 }
 
 const GNODE_W=182, GNODE_H=44;   // shared by graphSvg and the drag handler
+let LAYOUT="severity";   // "severity" | "planar" | "custom"
+let CUSTOM_POS={};        // node name -> [x,y] in custom mode
+
+// median-heuristic crossing reduction for a layered DAG (fewer edge crossings ≈ planar)
+function planarOrder(cols, maxLayer, preds, succ){
+  const order=new Map();
+  for(let l=0;l<=maxLayer;l++) order.set(l,(cols.get(l)||[]).slice());
+  const idxOf=l=>{ const m=new Map(); order.get(l).forEach((n,i)=>m.set(n,i)); return m; };
+  const med=xs=>{ xs=xs.filter(v=>v>=0).sort((a,b)=>a-b); const n=xs.length; if(!n) return -1;
+    const m=n>>1; if(n%2) return xs[m]; if(n===2) return (xs[0]+xs[1])/2;
+    const Lo=xs[m-1]-xs[0], Ro=xs[n-1]-xs[m]; return (Lo+Ro)===0?(xs[m-1]+xs[m])/2:(xs[m-1]*Ro+xs[m]*Lo)/(Lo+Ro); };
+  const reorder=(l,neigh)=>{ const keyed=order.get(l).map((n,i)=>{ let k=med(neigh(n)); if(k<0)k=i; return [n,k,i]; });
+    keyed.sort((a,b)=> a[1]===b[1]? a[2]-b[2] : a[1]-b[1]); order.set(l, keyed.map(x=>x[0])); };
+  for(let it=0; it<8; it++){
+    for(let l=1;l<=maxLayer;l++){ const prev=idxOf(l-1); reorder(l, n=>(preds.get(n)||[]).map(p=>prev.get(p))); }
+    for(let l=maxLayer-1;l>=0;l--){ const next=idxOf(l+1); reorder(l, n=>(succ.get(n)||[]).map(s=>next.get(s))); }
+  }
+  return order;
+}
+
+// Sugiyama coordinate assignment: pull each node to the barycentre of its
+// neighbours (aligning pass-throughs / fan-ins), keeping order + min spacing.
+function assignY(order, maxLayer, preds, succ, ROWH){
+  const y=new Map();
+  for(let l=0;l<=maxLayer;l++) order.get(l).forEach((n,i)=> y.set(n, i*ROWH));
+  const avg=vs=>{ vs=vs.filter(v=>v!=null); return vs.length? vs.reduce((a,b)=>a+b,0)/vs.length : null; };
+  const place=(arr,target)=>{
+    for(const n of arr){ const t=target(n); if(t!=null) y.set(n,t); }
+    for(let i=1;i<arr.length;i++){ const need=y.get(arr[i-1])+ROWH; if(y.get(arr[i])<need) y.set(arr[i],need); }
+  };
+  for(let it=0; it<14; it++){
+    for(let l=maxLayer-1;l>=0;l--) place(order.get(l), n=>avg((succ.get(n)||[]).map(s=>y.get(s))));  // up sweep (by successors)
+    for(let l=1;l<=maxLayer;l++)   place(order.get(l), n=>avg((preds.get(n)||[]).map(p=>y.get(p))));  // down sweep last (roots settle on preds)
+  }
+  let miny=Infinity; for(const v of y.values()) if(v<miny) miny=v;
+  for(const [k,v] of y) y.set(k, v-miny);
+  return y;
+}
+
 function graphSvg(chains, limit){
   const use=chains.slice(0, Math.min(limit, chains.length));
   if(!use.length) return "<p class=note>No chains to graph.</p>";
@@ -430,6 +473,7 @@ function graphSvg(chains, limit){
   }
   const preds=new Map();
   for(const k of edges.keys()){ const [f,t]=k.split(""); pushMap(preds,t,f); }
+  const succ=new Map(); for(const [t,fs] of preds) for(const f of fs) pushMap(succ,f,t);
   const layer=new Map();
   function L(n,guard){ if(layer.has(n)) return layer.get(n); if(guard.has(n)) return 0; guard.add(n);
     let m=0; for(const p of (preds.get(n)||[])) m=Math.max(m, L(p,guard)+1); layer.set(n,m); return m; }
@@ -437,10 +481,17 @@ function graphSvg(chains, limit){
   const cols=new Map(); let maxLayer=0;
   for(const [n,l] of layer){ pushMap(cols,l,n); if(l>maxLayer) maxLayer=l; }
   const NW=GNODE_W,NH=GNODE_H,COLW=232,ROWH=66,PADX=16,PADY=16;
-  const pos=new Map(); let maxRows=1;
-  for(let l=0;l<=maxLayer;l++){ const arr=(cols.get(l)||[]).sort((a,b)=>nodes.get(b).wait-nodes.get(a).wait);
-    maxRows=Math.max(maxRows,arr.length); arr.forEach((n,i)=>pos.set(n,{x:PADX+l*COLW, y:PADY+i*ROWH})); }
-  const W=PADX*2+maxLayer*COLW+NW, H=PADY*2+(maxRows-1)*ROWH+NH;
+  for(let l=0;l<=maxLayer;l++) (cols.get(l)||[]).sort((a,b)=>nodes.get(b).wait-nodes.get(a).wait);   // severity order
+  const order = (LAYOUT==="planar") ? planarOrder(cols,maxLayer,preds,succ) : cols;
+  const pos=new Map();
+  if(LAYOUT==="planar"){
+    const yy=assignY(order,maxLayer,preds,succ,ROWH);
+    for(let l=0;l<=maxLayer;l++) order.get(l).forEach(n=>pos.set(n,{x:PADX+l*COLW, y:PADY+yy.get(n)}));
+  } else {
+    for(let l=0;l<=maxLayer;l++) (order.get(l)||[]).forEach((n,i)=>pos.set(n,{x:PADX+l*COLW, y:PADY+i*ROWH}));
+  }
+  if(LAYOUT==="custom"){ for(const n of nodes.keys()){ const c=CUSTOM_POS[n]; if(c) pos.set(n,{x:c[0],y:c[1]}); } }
+  let W=0,H=0; for(const p of pos.values()){ if(p.x+NW>W) W=p.x+NW; if(p.y+NH>H) H=p.y+NH; } W+=PADX; H+=PADY;
   let maxEW=0.001; for(const w of edges.values()) if(w>maxEW) maxEW=w;
   let s=`<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role=img aria-label="Backpressure chain graph">`;
   // no arrowheads: direction is implicit (downstream on the left, roots on the right)
@@ -473,7 +524,14 @@ function renderReport(data){
     + data.root_split.map(([l,c])=>barRow(l,c,total)).join("")+"</tbody></table>");
 
   out.push("<h2>Heaviest backpressure chains</h2>");
-  out.push(info("A directed graph of the worst chains. Each <b>node</b> is a pipeline; an <b>arrow</b> points from a downstream (starved) pipeline to the upstream one it is waiting on — so data flows right→left and blame flows left→right. <b>Thicker, brighter edges</b> carry more wait. The nodes on the <b>right</b> are the roots — where backpressure originates — coloured by what they're waiting on. <b>Fan-in</b> (several pipelines converging on one node) means that upstream is a shared bottleneck. Hover any node or edge for exact values."));
+  out.push(info("A graph of the worst chains. Each <b>node</b> is a pipeline; an <b>edge</b> connects a downstream (starved) pipeline to the upstream one it waits on — downstream on the left, roots on the right. <b>Thicker, warmer (amber→red) edges</b> carry more backpressure weight. Root nodes on the right are where backpressure originates, coloured by what they're waiting on; <b>fan-in</b> onto one node means it's a shared bottleneck. <b>Layout</b>: <b>Severity</b> stacks nodes by wait; <b>Planar</b> reorders them to minimise crossing edges; dragging any node switches to <b>Custom</b>. Hover a node/edge for exact values."));
+  out.push('<div class=graphbar><label>Layout <select id=glayout>'
+    + '<option value=severity'+(LAYOUT==="severity"?" selected":"")+'>Severity</option>'
+    + '<option value=planar'+(LAYOUT==="planar"?" selected":"")+'>Planar</option>'
+    + '<option value=custom disabled'+(LAYOUT==="custom"?" selected":"")+'>Custom</option>'
+    + '</select></label>'
+    + (LAYOUT==="custom"?' <button id=glayoutreset>reset layout</button>':'')
+    + '</div>');
   out.push('<div class=graphwrap>'+graphSvg(data.chains, SHOWN.graph)+'</div>');
   out.push(moreBtn("graph", data.chains.length));
   out.push('<div class=glegend>'
@@ -623,19 +681,23 @@ function wireGraphDrag(){
   });
   svg.addEventListener("pointermove", e=>{
     if(!drag) return; const s=toSvg(e);
+    if(!drag.moved){ drag.moved=true;                    // first movement -> switch to Custom, snapshot current layout
+      if(LAYOUT!=="custom"){ CUSTOM_POS={}; svg.querySelectorAll(".gnode").forEach(n=>{ CUSTOM_POS[n.dataset.node]=[+n.dataset.x,+n.dataset.y]; }); LAYOUT="custom"; }
+    }
     const nx=drag.ox+(s.x-drag.sx), ny=drag.oy+(s.y-drag.sy);
     drag.g.dataset.x=nx; drag.g.dataset.y=ny; drag.g.setAttribute("transform",`translate(${nx},${ny})`);
+    CUSTOM_POS[drag.g.dataset.node]=[nx,ny];
     const nm=drag.g.dataset.node;
     for(const ed of edges) if(ed.dataset.from===nm || ed.dataset.to===nm) updEdge(ed);
   });
-  const end=()=>{ if(!drag) return; try{ svg.releasePointerCapture(drag.id); }catch(_){} drag=null; };
+  const end=()=>{ if(!drag) return; try{ svg.releasePointerCapture(drag.id); }catch(_){} const moved=drag.moved; drag=null; if(moved) draw(); };
   svg.addEventListener("pointerup", end);
   svg.addEventListener("pointercancel", end);
 }
 function recompute(){
   if (!STATE) return;
   STATE._data = analyse(STATE.actors, STATE.jvm, 15);
-  TABLE_STATE={};                          // reset sort/filter for the new file
+  TABLE_STATE={}; LAYOUT="severity"; CUSTOM_POS={};   // reset sort/filter/layout for the new file
   $("fn").textContent = STATE.source;
   $("summary").textContent = `${nf(STATE.actors.length)} actors · ${nf(STATE.jvm.length)} JVM threads`
     + (STATE.prefix ? ` · stripped ${STATE.prefix}-char line prefix` : "");
@@ -676,6 +738,7 @@ document.addEventListener("paste", e=>{
 // report controls
 $("body").addEventListener("click", e=>{
   if(!e.target.closest) return;
+  if(e.target.id==="glayoutreset"){ LAYOUT="severity"; CUSTOM_POS={}; draw(); return; }
   const more=e.target.closest(".more");
   if(more){ const sec=more.dataset.sec, cfg=SECTION_CFG[sec]||{step:10}; SHOWN[sec]=(SHOWN[sec]||0)+cfg.step; draw(); return; }
   const th=e.target.closest(".th-sort");
@@ -686,6 +749,9 @@ $("body").addEventListener("click", e=>{
 $("body").addEventListener("input", e=>{
   const inp=e.target.closest ? e.target.closest(".tfilter") : null; if(!inp) return;
   tstate(inp.dataset.sec).filter = inp.value; draw();
+});
+$("body").addEventListener("change", e=>{
+  if(e.target && e.target.id==="glayout"){ const v=e.target.value; if(v!=="custom"){ LAYOUT=v; CUSTOM_POS={}; draw(); } }
 });
 $("another").addEventListener("click", ()=>{
   reportEl.style.display="none"; loaderEl.style.display="flex";
