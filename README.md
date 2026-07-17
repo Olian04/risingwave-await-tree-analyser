@@ -1,5 +1,4 @@
 # risingwave-await-tree-analyser
 
-![demo image of analyser report](./assets/demo.png)
+[View Demo Report](https://olian04.github.io/risingwave-await-tree-analyser/?demo)
 
-Disclaimer: 100% built with AI
