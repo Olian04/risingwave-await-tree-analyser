@@ -76,6 +76,31 @@ code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.
 .hop .w{color:var(--mut);font-size:12px;font-variant-numeric:tabular-nums;margin-left:auto;}
 .note{color:var(--mut);font-size:12.5px;margin-top:8px;}
 .pill{display:inline-block;padding:1px 7px;border-radius:6px;background:var(--panel2);color:var(--mut);font-size:12px;margin-right:4px;}
+#report:focus,#body:focus{outline:none;}
+details.info{margin:-6px 0 16px;border:1px solid var(--bd);border-radius:8px;background:var(--panel2);}
+details.info>summary{cursor:pointer;padding:7px 12px;color:var(--mut);font-size:12.5px;user-select:none;}
+details.info>summary:hover{color:var(--tx);}
+details.info .ibody{padding:2px 14px 12px;font-size:13px;line-height:1.65;color:var(--tx);}
+details.info .ibody b{font-weight:600;}
+details.info .ibody code{background:var(--panel);border:1px solid var(--bd);border-radius:4px;padding:0 4px;}
+.graphwrap{overflow-x:auto;border:1px solid var(--bd);border-radius:10px;background:var(--panel);padding:14px;margin:6px 0 4px;}
+#body svg text.nt{fill:var(--tx);}
+#body svg text.ns{fill:var(--mut);}
+.glegend{display:flex;gap:14px;flex-wrap:wrap;color:var(--mut);font-size:12px;margin:8px 2px 0;}
+.glegend i{font-style:normal;display:inline-flex;align-items:center;gap:5px;}
+.glegend .sw{width:11px;height:11px;border-radius:3px;display:inline-block;}
+button.more{width:100%;margin:10px 0 2px;color:var(--mut);background:var(--panel);border-style:dashed;}
+button.more:hover{color:var(--tx);border-color:#3a4150;background:var(--panel2);}
+#prog{width:min(720px,92vw);}
+#prog .pname{font-weight:600;margin-bottom:6px;word-break:break-all;}
+#prog .plabel{color:var(--mut);font-size:13px;}
+.pbar{height:10px;background:var(--panel2);border:1px solid var(--bd);border-radius:6px;overflow:hidden;margin-top:12px;}
+.pbar>span{display:block;height:100%;width:0;background:var(--accent);transition:width .1s ease;}
+th.th-sort{cursor:pointer;user-select:none;white-space:nowrap;}
+th.th-sort:hover{color:var(--tx);}
+tr.filtrow td{padding:6px 8px;background:var(--panel);border-bottom:1px solid var(--bd);}
+input.tfilter{width:100%;background:var(--panel2);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:4px 8px;font:inherit;font-size:12.5px;}
+input.tfilter:focus{outline:none;border-color:var(--accent);}
 </style>
 </head>
 <body>
@@ -92,6 +117,11 @@ code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.
     <div class="err" id="err"></div>
   </div>
   <input type="file" id="file" hidden>
+  <div id="prog" hidden>
+    <div class="pname" id="pname"></div>
+    <div class="plabel" id="plabel">Reading…</div>
+    <div class="pbar"><span id="pfill"></span></div>
+  </div>
 </div>
 
 <div id="report">
@@ -100,8 +130,6 @@ code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.
       <span class="fn" id="fn"></span>
       <span class="muted" id="summary"></span>
       <span class="spacer"></span>
-      <label>Top <input type="number" id="topN" value="15" min="1" max="200"></label>
-      <label>Stuck ≥ <input type="number" id="stuck" value="2" min="0" step="0.5">s</label>
       <button id="dljson">Download JSON</button>
       <button id="another">Load another</button>
     </div>
@@ -124,6 +152,8 @@ const BUCKET_EDGES = [0,0.5,1,2,5,10,30,60,Infinity];
 const CAT_COLOUR = {Source:"amber", wait_pending_fetch_block:"red", receive_barrier:"blue",
   "Wait For New Buffer Item":"teal", UpstreamSinkUnion:"purple", input:"gray", DynamicFilter:"gray", Now:"gray"};
 
+const tick=()=>new Promise(r=>setTimeout(r,0));   // yield to the event loop (keeps progress bar live)
+const STUCK_S=5;   // fixed, non-configurable: an actor waiting >=5s is stuck for any sane barrier interval
 function parseDuration(v,u){ return parseFloat(v)*SEC[u]; }
 
 function normaliseLabel(label){
@@ -154,19 +184,24 @@ function splitSections(lines){
   return {tree:lines, jvm:[]};
 }
 
-function parseActors(treeLines){
-  const actors=[]; let cur=null;
-  for (const line of treeLines){
-    if (!line.trim() || line.startsWith("[Actor ")) continue;
-    const h = line.match(ACTOR_HEADER);
-    if (h){
-      const d = line.match(DURATION_RE);
-      cur = {id:+h[1], name:h[2], uptime:d?parseDuration(d[1],d[2]):0, nodes:[]};
-      actors.push(cur); continue;
+// Parses the WHOLE tree section — every line, every actor. Chunked + async only so a
+// progress bar can update on huge files; nothing is skipped or sampled.
+async function parseActors(treeLines, onProg){
+  const actors=[]; let cur=null; const N=treeLines.length;
+  for (let i=0;i<N;i++){
+    const line=treeLines[i];
+    if (line && line.trim() && !line.startsWith("[Actor ")){
+      const h = line.match(ACTOR_HEADER);
+      if (h){
+        const d = line.match(DURATION_RE);
+        cur = {id:+h[1], name:h[2], uptime:d?parseDuration(d[1],d[2]):0, nodes:[]};
+        actors.push(cur);
+      } else if (cur){                          // ignore preamble/heading rows before first actor
+        const d = line.match(DURATION_RE);
+        cur.nodes.push({depth:leadingWs(line), label:line.trim(), seconds:d?parseDuration(d[1],d[2]):null});
+      }
     }
-    if (!cur) continue;                       // preamble / heading rows before first actor
-    const d = line.match(DURATION_RE);
-    cur.nodes.push({depth:leadingWs(line), label:line.trim(), seconds:d?parseDuration(d[1],d[2]):null});
+    if (onProg && (i & 65535)===0){ onProg(i/N); await tick(); }
   }
   return actors;
 }
@@ -206,6 +241,13 @@ function computeDerived(a){
   delete a.nodes;   // free memory on big dumps
 }
 
+// Runs computeDerived over EVERY actor. Chunked/async only for the progress bar.
+async function computeAll(actors, onProg){
+  const N=actors.length;
+  for (let i=0;i<N;i++){ computeDerived(actors[i]);
+    if (onProg && (i & 16383)===0){ onProg(i/N); await tick(); } }
+}
+
 function parseJvm(jvmLines){
   const threads=[]; let cur=null;
   for (const line of jvmLines){
@@ -242,8 +284,8 @@ function walkToRoot(startId, byId, maxHops){
 // ===================================================================== //
 // Analysis                                                              //
 // ===================================================================== //
-function analyse(actors, jvm, stuckThreshold, top, maxHops){
-  const data={total_actors:actors.length, stuck_threshold:stuckThreshold};
+function analyse(actors, jvm, maxHops){
+  const data={total_actors:actors.length, stuck_threshold:STUCK_S};
   if (actors.length){
     const waits = actors.map(a=>a.epochWait).sort((x,y)=>x-y);
     const q=p=>waits[Math.min(Math.floor(waits.length*p), waits.length-1)];
@@ -258,7 +300,7 @@ function analyse(actors, jvm, stuckThreshold, top, maxHops){
     for (let i=0;i<BUCKET_EDGES.length-1;i++){ const lo=BUCKET_EDGES[i],hi=BUCKET_EDGES[i+1];
       const label = hi===Infinity ? (">"+lo+" s") : (lo+"–"+hi+" s");
       data.distribution.push([label, dist.get(i)||0]); }
-    data.stuck_count = actors.reduce((c,a)=>c+(a.epochWait>=stuckThreshold?1:0),0);
+    data.stuck_count = actors.reduce((c,a)=>c+(a.epochWait>=STUCK_S?1:0),0);
 
     const byPipe=new Map();
     for (const a of actors){ if(!byPipe.has(a.name)) byPipe.set(a.name,[]); byPipe.get(a.name).push(a); }
@@ -266,10 +308,10 @@ function analyse(actors, jvm, stuckThreshold, top, maxHops){
     for (const [name,g] of byPipe){ const ws=g.map(x=>x.epochWait).sort((x,y)=>x-y);
       pipes.push([arrMax(ws), median(ws), g.length, name]); }
     pipes.sort((a,b)=> b[0]-a[0] || b[2]-a[2]);
-    data.pipelines = pipes.slice(0,top);
+    data.pipelines = pipes;
 
-    data.await_points = mostCommon(counter(actors.filter(a=>a.primary).map(a=>a.primary[0])), top);
-    data.top_actors = actors.slice().sort((a,b)=>b.epochWait-a.epochWait).slice(0,top)
+    data.await_points = mostCommon(counter(actors.filter(a=>a.primary).map(a=>a.primary[0])), 0);
+    data.top_actors = actors.slice().sort((a,b)=>b.epochWait-a.epochWait)
       .map(a=>[a.epochWait, a.id, a.name, a.primary?a.primary[0]:"?"]);
 
     const byId=new Map(actors.map(a=>[a.id,a]));
@@ -289,8 +331,8 @@ function analyse(actors, jvm, stuckThreshold, top, maxHops){
     data.jvm={
       total:jvm.length,
       states:mostCommon(counter(jvm.map(t=>t.state)),0),
-      groups:mostCommon(counter(jvm.map(t=>collapseThreadName(t.name))),top),
-      runnable:mostCommon(counter(jvm.filter(t=>t.state==="RUNNABLE").map(repFrame)),top),
+      groups:mostCommon(counter(jvm.map(t=>collapseThreadName(t.name))),0),
+      runnable:mostCommon(counter(jvm.filter(t=>t.state==="RUNNABLE").map(repFrame)),0),
       blocked:jvm.filter(t=>t.state==="BLOCKED").length,
     };
   }
@@ -327,21 +369,120 @@ function barRow(label,count,total){ const pct=total?count/total*100:0;
        + `<td style="width:55%"><div class=barcell><span style="width:${pct.toFixed(1)}%"></span>`
        + `<em>${pct.toFixed(1)}%</em></div></td></tr>`; }
 
+const CAT_HEX={amber:"#e0a13c",red:"#e05a5a",blue:"#5aa0e0",teal:"#3fb8a0",purple:"#9b8cf0",gray:"#6b7280",green:"#57b368"};
+function catHex(cat){ return CAT_HEX[CAT_COLOUR[cat]||"gray"]; }
+function pushMap(m,k,v){ if(!m.has(k)) m.set(k,[]); m.get(k).push(v); }
+function info(htmlStr){ return `<details class=info><summary>ⓘ How to read this</summary><div class=ibody>${htmlStr}</div></details>`; }
+
+// per-section "show more" state — each section starts small and expands independently
+const SECTION_CFG={graph:{init:6,step:6}, chains:{init:5,step:5}, pipelines:{init:8,step:12},
+  awaits:{init:8,step:12}, actors:{init:8,step:12}, jvmGroups:{init:8,step:12}, jvmRun:{init:6,step:10}};
+let SHOWN={};
+function resetShown(){ SHOWN={}; for(const k in SECTION_CFG) SHOWN[k]=SECTION_CFG[k].init; }
+function moreBtn(key,total){ const shown=SHOWN[key]||0; if(shown>=total) return "";
+  return `<button class=more data-sec="${key}">Show more… (${total-shown} more)</button>`; }
+
+// ---- sortable + filterable tables ----
+// Filtering/sorting operate on the FULL dataset for that section, then the result
+// is sliced to SHOWN[key]; they never limit what was parsed/analysed.
+let TABLE_STATE={};   // secKey -> {sort:colIndex|null, dir:1|-1, filter:""}
+function tstate(k){ return TABLE_STATE[k] || (TABLE_STATE[k]={sort:null, dir:-1, filter:""}); }
+function tableHTML(secKey, columns, rows){
+  const st=tstate(secKey);
+  let full=rows;
+  if(st.filter){ const q=st.filter.toLowerCase();
+    full=full.filter(r=>columns.some(c=>String(c.get(r)).toLowerCase().includes(q))); }
+  if(st.sort!=null && columns[st.sort]){ const c=columns[st.sort];
+    full=full.slice().sort((a,b)=>{ const x=c.get(a),y=c.get(b);
+      return c.type==="num" ? (x-y)*st.dir : String(x).localeCompare(String(y))*st.dir; }); }
+  const shown=full.slice(0, SHOWN[secKey]||0);
+  const ths=columns.map((c,i)=>{ const ar=st.sort===i?(st.dir<0?" ▾":" ▴"):"";
+    return `<th class="th-sort${c.type==='num'?' num':''}" data-sec="${secKey}" data-col="${i}" title="click to sort">${esc(c.label)}${ar}</th>`; }).join("");
+  const filt=`<tr class=filtrow><td colspan="${columns.length}"><input class=tfilter data-sec="${secKey}" placeholder="filter ${esc(secKey)}…" value="${esc(st.filter)}"></td></tr>`;
+  const body=shown.map(r=>"<tr>"+columns.map(c=>c.cell?c.cell(r):`<td class="${c.cls||(c.type==='num'?'num':'')}">${esc(c.get(r))}</td>`).join("")+"</tr>").join("");
+  return `<table class=sortable><thead><tr>${ths}</tr>${filt}</thead><tbody>${body}</tbody></table>`+moreBtn(secKey, full.length);
+}
+
+// edge colour by backpressure importance: teal (low) -> amber -> red (high)
+function edgeColor(t){
+  const S=[[63,184,160],[224,161,60],[224,90,90]];
+  const [a,b,f] = t<=0.5 ? [S[0],S[1],t/0.5] : [S[1],S[2],(t-0.5)/0.5];
+  const c=a.map((v,i)=>Math.round(v+(b[i]-v)*f));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+function graphSvg(chains, limit){
+  const use=chains.slice(0, Math.min(limit, chains.length));
+  if(!use.length) return "<p class=note>No chains to graph.</p>";
+  const nodes=new Map(), edges=new Map();
+  for(const ch of use){
+    for(let i=0;i<ch.hops.length;i++){
+      const [nm,w,cat]=ch.hops[i];
+      let nd=nodes.get(nm); if(!nd){ nd={name:nm,wait:w,cat}; nodes.set(nm,nd); }
+      if(w>nd.wait) nd.wait=w;
+      if(nd.cat==="input" && cat!=="input") nd.cat=cat;        // prefer a terminal category
+      if(i>0){ const f=ch.hops[i-1][0], k=f+""+nm; edges.set(k, Math.max(edges.get(k)||0, ch.hops[i-1][1])); }
+    }
+  }
+  const preds=new Map();
+  for(const k of edges.keys()){ const [f,t]=k.split(""); pushMap(preds,t,f); }
+  const layer=new Map();
+  function L(n,guard){ if(layer.has(n)) return layer.get(n); if(guard.has(n)) return 0; guard.add(n);
+    let m=0; for(const p of (preds.get(n)||[])) m=Math.max(m, L(p,guard)+1); layer.set(n,m); return m; }
+  for(const n of nodes.keys()) L(n,new Set());
+  const cols=new Map(); let maxLayer=0;
+  for(const [n,l] of layer){ pushMap(cols,l,n); if(l>maxLayer) maxLayer=l; }
+  const NW=182,NH=44,COLW=232,ROWH=66,PADX=16,PADY=16;
+  const pos=new Map(); let maxRows=1;
+  for(let l=0;l<=maxLayer;l++){ const arr=(cols.get(l)||[]).sort((a,b)=>nodes.get(b).wait-nodes.get(a).wait);
+    maxRows=Math.max(maxRows,arr.length); arr.forEach((n,i)=>pos.set(n,{x:PADX+l*COLW, y:PADY+i*ROWH})); }
+  const W=PADX*2+maxLayer*COLW+NW, H=PADY*2+(maxRows-1)*ROWH+NH;
+  let maxEW=0.001; for(const w of edges.values()) if(w>maxEW) maxEW=w;
+  let s=`<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role=img aria-label="Backpressure chain graph">`;
+  // no arrowheads: direction is implicit (downstream on the left, roots on the right)
+  for(const [k,w] of edges){ const [f,t]=k.split(""); const a=pos.get(f),b=pos.get(t); if(!a||!b) continue;
+    const x1=a.x+NW, y1=a.y+NH/2, x2=b.x, y2=b.y+NH/2, mx=(x1+x2)/2;
+    const sw=(1.2+5*(w/maxEW)).toFixed(1);
+    s+=`<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill=none stroke="${edgeColor(w/maxEW)}" stroke-opacity="0.85" stroke-width=${sw}><title>${esc(f)} → ${esc(t)}: ${w.toFixed(2)}s</title></path>`; }
+  for(const [n,nd] of nodes){ const p=pos.get(n), hex=catHex(nd.cat); const disp=n.length>24?n.slice(0,23)+"…":n;
+    s+=`<g><title>${esc(n)} — ${esc(nd.cat)} — ${nd.wait.toFixed(2)}s</title>`
+     + `<rect x=${p.x} y=${p.y} width=${NW} height=${NH} rx=8 fill="${hex}22" stroke="${hex}" stroke-opacity="0.75"/>`
+     + `<text class=nt x=${p.x+11} y=${p.y+18} font-size=12>${esc(disp)}</text>`
+     + `<text class=ns x=${p.x+11} y=${p.y+34} font-size=11>${esc(nd.cat)} · ${nd.wait.toFixed(2)}s</text></g>`; }
+  s+="</svg>";
+  return s;
+}
+
 function renderReport(data){
   const total=data.total_actors;
   if (!total) return "<p>No actors parsed. If this is a dump with a non-standard format, check the console.</p>";
   const s=data.wait_stats; const out=[];
   const cards=[["Actors",nf(total)],["Epoch-wait median",s.median.toFixed(2)+"s"],
-    ["p99",s.p99.toFixed(2)+"s"],["max",s.max.toFixed(2)+"s"],["Stuck actors",nf(data.stuck_count)]];
+    ["p99",s.p99.toFixed(2)+"s"],["max",s.max.toFixed(2)+"s"],["Actors ≥ 5s",nf(data.stuck_count)]];
   out.push('<div class=cards>'+cards.map(([k,v])=>`<div class=card><div class=k>${k}</div><div class=v>${v}</div></div>`).join("")+'</div>');
 
   out.push("<h2>Backpressure roots — where every chain bottoms out</h2>");
   out.push('<p class=sub>Each actor’s wait traced upstream (most-stuck branch) to its terminal await.</p>');
+  out.push(info("Every actor's wait is followed <b>upstream</b> — at each hop we take the input branch that is most stuck — until it reaches a terminal it can't blame on another actor. That terminal is the real bottleneck. <b>Source</b> = waiting on ingestion (CDC / Kafka / etc.); <b>wait_pending_fetch_block</b> = waiting on the state store (S3 / block cache); <b>receive_barrier</b> = waiting for the checkpoint barrier (usually just normal propagation); <b>Wait For New Buffer Item</b> = a sink starved for input; <b>UpstreamSinkUnion</b> = reading a base table fed by an upstream source/sink. A high <b>Source</b> share means the workload is ingestion-bound; a high storage share points at the cache / object store."));
   out.push("<table><thead><tr><th>Terminal await</th><th class=num>Actors</th><th>Share</th></tr></thead><tbody>"
     + data.root_split.map(([l,c])=>barRow(l,c,total)).join("")+"</tbody></table>");
 
+  out.push("<h2>Heaviest backpressure chains</h2>");
+  out.push(info("A directed graph of the worst chains. Each <b>node</b> is a pipeline; an <b>arrow</b> points from a downstream (starved) pipeline to the upstream one it is waiting on — so data flows right→left and blame flows left→right. <b>Thicker, brighter edges</b> carry more wait. The nodes on the <b>right</b> are the roots — where backpressure originates — coloured by what they're waiting on. <b>Fan-in</b> (several pipelines converging on one node) means that upstream is a shared bottleneck. Hover any node or edge for exact values."));
+  out.push('<div class=graphwrap>'+graphSvg(data.chains, SHOWN.graph)+'</div>');
+  out.push(moreBtn("graph", data.chains.length));
+  out.push('<div class=glegend>'
+    + '<i><span class=sw style="background:#e0a13c"></span>Source</i>'
+    + '<i><span class=sw style="background:#9b8cf0"></span>UpstreamSinkUnion</i>'
+    + '<i><span class=sw style="background:#5aa0e0"></span>receive_barrier</i>'
+    + '<i><span class=sw style="background:#e05a5a"></span>storage fetch</i>'
+    + '<i><span class=sw style="background:#3fb8a0"></span>starved sink</i>'
+    + '<i><span class=sw style="background:#6b7280"></span>waiting on input</i>'
+    + '<i style="margin-left:auto"><span class=sw style="width:34px;background:linear-gradient(90deg,#3fb8a0,#e0a13c,#e05a5a)"></span>edge = backpressure weight (low→high)</i></div>');
+
   out.push("<h2>Worst chain per pipeline (downstream → upstream root)</h2>");
-  for (const ch of data.chains){
+  out.push(info("For each of the slowest pipelines, its single most-stuck path traced to the root, with the wait at each hop. Read top→bottom: the first line is the slow pipeline; indented lines are successively further upstream. The badge shows what each hop is blocked on. Where the chain bottoms out is the cause — <b>Source/UpstreamSinkUnion</b> = ingestion, <b>wait_pending_fetch_block</b> = storage. Caveat: when the dump is off-peak (all waits near one barrier interval) the branch chosen at each tie is heuristic — trust the aggregate root split above more than any single path."));
+  for (const ch of data.chains.slice(0, SHOWN.chains)){
     out.push('<div class=chain><div class=title><span class=mono>'+esc(ch.pipeline)+'</span>'
       +`<span class=meta>max ${ch.max_wait.toFixed(2)}s · ${nf(ch.actor_count)} actors</span></div>`);
     ch.hops.forEach(([nm,wait,cat],depth)=>{
@@ -351,38 +492,59 @@ function renderReport(data){
     out.push("</div>");
   }
 
+  out.push(moreBtn("chains", data.chains.length));
+
   out.push("<h2>Epoch-wait distribution</h2>");
+  out.push(info("How long actors have been in their current step. At rest this is bounded by the barrier interval (~1s), so a healthy cluster sits in the <b>0–1s</b> buckets. Actors in the <b>5s+</b> buckets indicate a real freeze or heavy backpressure. If everything is ≤~1–2s, the dump was taken off-peak and won't show the incident's worst moment — recapture while latency is climbing."));
   out.push("<table><thead><tr><th>Bucket</th><th class=num>Actors</th><th>Share</th></tr></thead><tbody>"
     + data.distribution.map(([l,c])=>barRow(l,c,total)).join("")+"</tbody></table>");
 
   out.push("<h2>Pipelines by max epoch-wait</h2>");
-  out.push("<table><thead><tr><th>Pipeline</th><th class=num>max</th><th class=num>median</th><th class=num>actors</th></tr></thead><tbody>"
-    + data.pipelines.map(([mx,md,c,n])=>`<tr><td class=mono>${esc(n)}</td><td class=num>${mx.toFixed(2)}s</td><td class=num>${md.toFixed(2)}s</td><td class=num>${nf(c)}</td></tr>`).join("")
-    + "</tbody></table>");
+  out.push(info("Each streaming job (materialized view, index, or sink), ranked by its slowest actor. A high <b>max</b> with a low <b>median</b> means one straggler actor — data skew or a hot key; a high <b>median</b> means the whole job is slow. <b>actors</b> is that job's parallelism."));
+  out.push(tableHTML("pipelines", [
+    {label:"Pipeline", type:"text", cls:"mono", get:r=>r[3]},
+    {label:"max",      type:"num", get:r=>r[0], cell:r=>`<td class=num>${r[0].toFixed(2)}s</td>`},
+    {label:"median",   type:"num", get:r=>r[1], cell:r=>`<td class=num>${r[1].toFixed(2)}s</td>`},
+    {label:"actors",   type:"num", get:r=>r[2], cell:r=>`<td class=num>${nf(r[2])}</td>`},
+  ], data.pipelines));
 
   out.push("<h2>Primary await-point (all actors)</h2>");
-  out.push("<table><thead><tr><th>Await point</th><th class=num>Actors</th><th>Share</th></tr></thead><tbody>"
-    + data.await_points.map(([l,c])=>barRow(l,c,total)).join("")+"</tbody></table>");
+  out.push(info("What actors are <b>directly</b> blocked on right now (one hop — not traced to root). <b>RemoteInput/LocalInput</b> = waiting for data from an upstream actor (normal idling or backpressure); <b>Source</b> = ingestion; <b>Wait For New Buffer Item</b> = a starved sink; <b>receive_barrier</b> = awaiting the barrier. Lots of input-waiting is expected — the roots section above is what tells you the underlying cause."));
+  out.push(tableHTML("awaits", [
+    {label:"Await point", type:"text", get:r=>r[0]},
+    {label:"Actors",      type:"num", get:r=>r[1], cell:r=>`<td class=num>${nf(r[1])}</td>`},
+    {label:"Share",       type:"num", get:r=>r[1], cell:r=>{const p=r[1]/total*100;
+       return `<td style="width:55%"><div class=barcell><span style="width:${p.toFixed(1)}%"></span><em>${p.toFixed(1)}%</em></div></td>`;}},
+  ], data.await_points));
 
   out.push("<h2>Slowest individual actors</h2>");
-  out.push("<table><thead><tr><th class=num>wait</th><th class=num>actor</th><th>pipeline</th><th>await</th></tr></thead><tbody>"
-    + data.top_actors.map(([w,id,n,aw])=>`<tr><td class=num>${w.toFixed(2)}s</td><td class=num>${id}</td><td class=mono>${esc(n)}</td><td>${badge(normaliseCategory(aw))}</td></tr>`).join("")
-    + "</tbody></table>");
+  out.push(info("The individual actors with the longest epoch wait and what each is blocked on. Useful for telling a single hot actor (data skew) apart from a whole pipeline being slow — if one actor dominates while its siblings are fast, you have skew on that operator's key."));
+  out.push(tableHTML("actors", [
+    {label:"wait",     type:"num",  get:r=>r[0], cell:r=>`<td class=num>${r[0].toFixed(2)}s</td>`},
+    {label:"actor",    type:"num",  get:r=>r[1], cell:r=>`<td class=num>${r[1]}</td>`},
+    {label:"pipeline", type:"text", cls:"mono", get:r=>r[2]},
+    {label:"await",    type:"text", get:r=>normaliseCategory(r[3]), cell:r=>`<td>${badge(normaliseCategory(r[3]))}</td>`},
+  ], data.top_actors));
 
   if (data.jvm){
     const j=data.jvm;
     out.push("<h2>JVM connector-node thread dump</h2>");
+    out.push(info("The embedded connector node runs CDC sources and JDBC/other sinks on the JVM. <b>RUNNABLE</b> threads sitting in socket reads (e.g. MongoDB <code>SocketStream.read</code>) mean it is actively pulling/pushing — a busy connector here can itself be the ingestion limiter. <b>BLOCKED</b> threads indicate lock contention. The thread-group table shows which connectors are active and how many threads each uses."));
     out.push(`<p class=sub>${nf(j.total)} threads · `+j.states.map(([st,c])=>`<span class=pill>${esc(st)} ${c}</span>`).join("")+"</p>");
-    out.push("<table><thead><tr><th>Thread group</th><th class=num>Count</th></tr></thead><tbody>"
-      + j.groups.map(([g,c])=>`<tr><td class=mono>${esc(g)}</td><td class=num>${c}</td></tr>`).join("")+"</tbody></table>");
+    out.push(tableHTML("jvmGroups", [
+      {label:"Thread group", type:"text", cls:"mono", get:r=>r[0]},
+      {label:"Count",        type:"num", get:r=>r[1], cell:r=>`<td class=num>${r[1]}</td>`},
+    ], j.groups));
     if (j.runnable.length){
       out.push("<h2>RUNNABLE threads — representative frame</h2>");
-      out.push("<table><thead><tr><th>Frame</th><th class=num>Count</th></tr></thead><tbody>"
-        + j.runnable.map(([f,c])=>`<tr><td class=mono>${esc(f)}</td><td class=num>${c}</td></tr>`).join("")+"</tbody></table>");
+      out.push(tableHTML("jvmRun", [
+        {label:"Frame", type:"text", cls:"mono", get:r=>r[0]},
+        {label:"Count", type:"num", get:r=>r[1], cell:r=>`<td class=num>${r[1]}</td>`},
+      ], j.runnable));
     }
     out.push(`<p class=note>Lock-contended (BLOCKED) threads: ${j.blocked}</p>`);
   }
-  out.push('<p class=note>Chain roots follow the most-stuck upstream branch at each hop — robust for the aggregate split, heuristic for any single path when the dump is off-peak.</p>');
+  out.push('<p class=note>All '+nf(total)+' actors in the file were parsed and analysed. “Show more” only changes how many rows are shown — it never limits the analysis. Chain roots follow the most-stuck upstream branch at each hop — robust for the aggregate split, heuristic for any single path when the dump is off-peak.</p>');
   return out.join("");
 }
 
@@ -395,47 +557,67 @@ let STATE=null;   // {actors, jvm, source, prefix}
 
 function setError(msg){ errEl.textContent = msg||""; }
 
-function process(text, source){
+// ---- progress UI ----
+const progEl=$("prog"), pfill=$("pfill"), plabel=$("plabel"), pname=$("pname");
+function showProgress(name){ setError(""); dropEl.style.display="none"; progEl.hidden=false; pname.textContent=name; setProg(0,"Reading…"); }
+function hideProgress(){ progEl.hidden=true; dropEl.style.display=""; }
+function setProg(frac,label){ const p=Math.max(0,Math.min(1,frac)); pfill.style.width=(p*100).toFixed(0)+"%"; if(label!=null) plabel.textContent=label+" "+(p*100).toFixed(0)+"%"; }
+
+// Parse + analyse the ENTIRE file. Async only so the progress bar can update; no sampling.
+async function runPipeline(text, source){
   try{
-    setError("");
+    if (progEl.hidden) showProgress(source);
+    setProg(0.28,"Preparing…"); await tick();
     let lines = text.split(/\r?\n/);
     const sp = stripUniformPrefix(lines); lines = sp.lines;
     const {tree, jvm} = splitSections(lines);
-    const actors = parseActors(tree);
-    for (const a of actors) computeDerived(a);
+    const actors = await parseActors(tree, f=>setProg(0.30+0.35*f,"Parsing actors…"));
+    await computeAll(actors, f=>setProg(0.65+0.20*f,"Analysing actors…"));
     const jvmThreads = parseJvm(jvm);
-    if (!actors.length){ setError("0 actors parsed — is this an await-tree dump?"); return; }
+    if (!actors.length){ hideProgress(); setError("0 actors parsed — is this an await-tree dump?"); return; }
     STATE = {actors, jvm:jvmThreads, source, prefix:sp.prefix};
+    setProg(0.9,"Building report…"); await tick();
+    recompute();                          // analyses the full set, then renders
+    setProg(1,"Done"); hideProgress();
     loaderEl.style.display="none"; reportEl.style.display="block";
-    render();
-  }catch(e){ console.error(e); setError("Parse error: "+e.message); }
+    reportEl.tabIndex=-1; reportEl.focus({preventScroll:true});   // keep paste working in report view
+  }catch(e){ console.error(e); hideProgress(); setError("Parse error: "+e.message); }
 }
 
-function render(){
+function bannerHtml(){ return (STATE && STATE.prefix)
+  ? `<div class=banner>Detected and stripped a ${STATE.prefix}-character per-line prefix (e.g. log timestamps) before parsing.</div>` : ""; }
+function draw(){
+  const body=$("body");
+  const open=[...body.querySelectorAll("details.info")].map(d=>d.open);   // preserve expanded info cards across re-render
+  const ae=document.activeElement;                                        // preserve focus/caret in a filter box while typing
+  const af=(ae && ae.classList && ae.classList.contains("tfilter")) ? {sec:ae.dataset.sec, s:ae.selectionStart, e:ae.selectionEnd} : null;
+  body.innerHTML = bannerHtml() + renderReport(STATE._data);
+  const ds=body.querySelectorAll("details.info"); open.forEach((o,i)=>{ if(ds[i]) ds[i].open=o; });
+  if(af){ const inp=body.querySelector('.tfilter[data-sec="'+af.sec+'"]'); if(inp){ inp.focus(); try{ inp.setSelectionRange(af.s,af.e); }catch(_){} } }
+}
+function recompute(){
   if (!STATE) return;
-  const top = Math.max(1, +$("topN").value||15);
-  const stuck = Math.max(0, +$("stuck").value||0);
-  const data = analyse(STATE.actors, STATE.jvm, stuck, top, 15);
+  STATE._data = analyse(STATE.actors, STATE.jvm, 15);
+  TABLE_STATE={};                          // reset sort/filter for the new file
   $("fn").textContent = STATE.source;
   $("summary").textContent = `${nf(STATE.actors.length)} actors · ${nf(STATE.jvm.length)} JVM threads`
     + (STATE.prefix ? ` · stripped ${STATE.prefix}-char line prefix` : "");
-  let banner = STATE.prefix ? `<div class=banner>Detected and stripped a ${STATE.prefix}-character per-line prefix (e.g. log timestamps) before parsing.</div>` : "";
-  $("body").innerHTML = banner + renderReport(data);
-  STATE._data = data;
+  resetShown(); draw();
 }
 
 function readFile(file){
+  showProgress(file.name);
   const r=new FileReader();
-  r.onload = ()=>process(r.result, file.name);
-  r.onerror = ()=>setError("Could not read file.");
+  r.onprogress = e=>{ if(e.lengthComputable) setProg(0.25*(e.loaded/e.total),"Reading…"); };
+  r.onload = ()=>runPipeline(r.result, file.name);
+  r.onerror = ()=>{ hideProgress(); setError("Could not read file."); };
   r.readAsText(file);
 }
-function loadWith(fn){ setError(""); dropEl.querySelector(".big").textContent="Parsing…"; setTimeout(fn, 10); }
 
 // click / keyboard
 dropEl.addEventListener("click", ()=>fileEl.click());
 dropEl.addEventListener("keydown", e=>{ if(e.key==="Enter"||e.key===" ") fileEl.click(); });
-fileEl.addEventListener("change", ()=>{ if(fileEl.files[0]){ const f=fileEl.files[0]; loadWith(()=>readFile(f)); } });
+fileEl.addEventListener("change", ()=>{ if(fileEl.files[0]) readFile(fileEl.files[0]); });
 
 // drag & drop (whole window)
 ["dragenter","dragover"].forEach(ev=>window.addEventListener(ev,e=>{ e.preventDefault(); dropEl.classList.add("hot"); }));
@@ -443,24 +625,35 @@ fileEl.addEventListener("change", ()=>{ if(fileEl.files[0]){ const f=fileEl.file
 window.addEventListener("drop", e=>{
   e.preventDefault(); dropEl.classList.remove("hot");
   const dt=e.dataTransfer; if(!dt) return;
-  if (dt.files && dt.files.length){ const f=dt.files[0]; loadWith(()=>readFile(f)); return; }
-  const t = dt.getData("text"); if (t && t.trim()) loadWith(()=>process(t,"dropped text"));
+  if (dt.files && dt.files.length){ readFile(dt.files[0]); return; }
+  const t = dt.getData("text"); if (t && t.trim()) runPipeline(t,"dropped text");
 });
 
-// paste anywhere (file or raw text)
-window.addEventListener("paste", e=>{
+// paste anywhere, regardless of focus (file or raw text)
+document.addEventListener("paste", e=>{
   const cd=e.clipboardData; if(!cd) return;
-  if (cd.files && cd.files.length){ e.preventDefault(); const f=cd.files[0]; loadWith(()=>readFile(f)); return; }
-  const t = cd.getData("text/plain"); if (t && t.trim()){ e.preventDefault(); loadWith(()=>process(t,"pasted")); }
+  if (cd.files && cd.files.length){ e.preventDefault(); readFile(cd.files[0]); return; }
+  const t = cd.getData("text/plain"); if (t && t.trim()){ e.preventDefault(); runPipeline(t,"pasted"); }
 });
 
 // report controls
-$("topN").addEventListener("change", render);
-$("stuck").addEventListener("change", render);
+$("body").addEventListener("click", e=>{
+  if(!e.target.closest) return;
+  const more=e.target.closest(".more");
+  if(more){ const sec=more.dataset.sec, cfg=SECTION_CFG[sec]||{step:10}; SHOWN[sec]=(SHOWN[sec]||0)+cfg.step; draw(); return; }
+  const th=e.target.closest(".th-sort");
+  if(th){ const sec=th.dataset.sec, col=+th.dataset.col, st=tstate(sec);
+    if(st.sort===col){ st.dir=-st.dir; } else { st.sort=col; st.dir=-1; }
+    draw(); return; }
+});
+$("body").addEventListener("input", e=>{
+  const inp=e.target.closest ? e.target.closest(".tfilter") : null; if(!inp) return;
+  tstate(inp.dataset.sec).filter = inp.value; draw();
+});
 $("another").addEventListener("click", ()=>{
   reportEl.style.display="none"; loaderEl.style.display="flex";
   dropEl.querySelector(".big").textContent="Drop a RisingWave await-tree dump here";
-  STATE=null; fileEl.value="";
+  STATE=null; fileEl.value=""; dropEl.focus();
 });
 $("dljson").addEventListener("click", ()=>{
   if (!STATE) return;
@@ -468,6 +661,9 @@ $("dljson").addEventListener("click", ()=>{
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
   a.download=(STATE.source.replace(/\.[^.]*$/,"")||"await-tree")+".json"; a.click(); URL.revokeObjectURL(a.href);
 });
+
+// focus the loader on first load so paste works immediately
+dropEl.focus();
 </script>
 </body>
 </html>
