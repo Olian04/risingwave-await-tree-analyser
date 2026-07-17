@@ -646,10 +646,8 @@
               <button id="metaload">Fetch await-tree</button>
             </div>
             <div class="metahint">
-              GET <code>/api/monitor/await_tree/?format=json</code> from the meta node. JSON carries each span’s
-              <code>is_long_running</code> flag, so idle is exact even under 10s (a pasted text dump falls back to the
-              <code>!!!</code>/≥10s rule). The dashboard allows cross-origin GET, but if your browser still blocks it,
-              paste the dump instead.
+              GET <code>/api/monitor/await_tree/</code> from the meta node (same call the RW dashboard makes). Needs
+              network access to the meta node; a browser may block it via CORS — paste the dump if so.
             </div>
             <div class="metaerr" id="metaerr"></div>
           </div>
@@ -1029,33 +1027,25 @@
               a.primary ? a.primary[0] : a.idlePrimary ? a.idlePrimary[0] + " (idle)" : "?",
             ]);
 
-          const byId = new Map(actors.map((a) => [a.id, a]));
+          // Idle summary — long-running spans surfaced explicitly, so they're visible but clearly labelled.
+          // Breakdown is over every actor that HAS an idle span (by its longest idle await), not just
+          // purely-idle actors — most actors pair a ~1s true Epoch wait with a long-running idle span.
+          const withIdle = actors.filter((a) => a.idleWait > 0);
+          data.idle = {
+            idle_only: actors.reduce((c, a) => c + (a.idleOnly ? 1 : 0), 0),
+            with_idle: withIdle.length,
+            max_idle: arrMax(actors.map((a) => a.idleWait)),
+            split: mostCommon(counter(withIdle.filter((a) => a.idlePrimary).map((a) => a.idlePrimary[0])), 0),
+          };
 
-          // Root await — where each actor bottoms out. Two kinds of row, in one table:
-          //   • true-wait roots: each actor's chain terminal category (Source, receive_barrier, ...).
-          //   • idle awaits (labelled "(idle)"): the long-running span each idle-bearing actor sits on
-          //     (consume_log, an idle Source, ...) — NOT backpressure.
-          // An actor with both a true-wait root and a long-running idle span contributes one row to each,
-          // so idle is visible here directly (no separate section).
+          const byId = new Map(actors.map((a) => [a.id, a]));
           const roots = new Map();
           for (const a of actors) {
             const term = byId.get(walkToRoot(a.id, byId, maxHops).at(-1));
-            const r = term.idleOnly ? term.category + " (idle)" : term.category;
+            const r = term.idleOnly ? term.category + " (idle)" : term.category; // idle terminals kept distinct
             roots.set(r, (roots.get(r) || 0) + 1);
           }
-          for (const a of actors) {
-            if (a.idleWait > 0 && a.idlePrimary && !a.idleOnly) {
-              const key = a.idlePrimary[0] + " (idle)";
-              roots.set(key, (roots.get(key) || 0) + 1);
-            }
-          }
           data.root_split = mostCommon(roots, 0);
-
-          // idle stats retained for the JSON export (on-page it's folded into the root-await table above)
-          data.idle = {
-            with_idle: actors.reduce((c, a) => c + (a.idleWait > 0 ? 1 : 0), 0),
-            max_idle: arrMax(actors.map((a) => a.idleWait)),
-          };
 
           data.chains = [];
           for (const [, , , name] of data.pipelines) {
@@ -1097,8 +1087,10 @@
         for (const k in data.wait_stats) o.wait_stats[k] = r(data.wait_stats[k]);
         o.distribution = data.distribution.map(([b, c]) => ({ bucket: b.replace(/–/g, "-"), actors: c }));
         o.idle = {
+          idle_only_actors: data.idle.idle_only,
           actors_with_idle_span: data.idle.with_idle,
           max_idle_s: r(data.idle.max_idle),
+          split: data.idle.split.map(([k, v]) => ({ await: k, actors: v })),
         };
         o.root_split = data.root_split.map(([k, v]) => ({ await: k, actors: v }));
         o.pipelines = data.pipelines.map(([mx, md, c, n]) => ({ pipeline: n, max: r(mx), median: r(md), actors: c }));
@@ -1339,10 +1331,11 @@
       }
 
       function graphSvg(chains, limit) {
-        if (!chains.length) return "<p class=note>No chains to graph.</p>";
+        const use = chains.slice(0, Math.min(limit, chains.length));
+        if (!use.length) return "<p class=note>No chains to graph.</p>";
         const nodes = new Map(),
           edges = new Map();
-        for (const ch of chains) {
+        for (const ch of use) {
           for (let i = 0; i < ch.hops.length; i++) {
             const [nm, w, cat] = ch.hops[i];
             let nd = nodes.get(nm);
@@ -1359,35 +1352,13 @@
             }
           }
         }
-        // Expand whatever is shown to FULL connected components. keep = every node reachable from the
-        // nodes in the first `limit` chains (or, in double-click focus mode, the selected subtree).
-        // Showing complete components means "show more" only ever reveals a NEW disconnected component —
-        // it never sprouts a new edge into an already-visible node.
-        const adj = new Map();
-        for (const k of edges.keys()) {
-          const [ef, et] = k.split("");
-          pushMap(adj, ef, et);
-          pushMap(adj, et, ef);
-        }
-        let keep;
         if (GRAPH_FILTER) {
-          keep = GRAPH_FILTER;
-        } else {
-          const seed = new Set();
-          for (const ch of chains.slice(0, Math.min(limit, chains.length))) for (const h of ch.hops) seed.add(h[0]);
-          keep = new Set();
-          const q = [...seed];
-          while (q.length) {
-            const c = q.shift();
-            if (keep.has(c)) continue;
-            keep.add(c);
-            for (const nb of adj.get(c) || []) if (!keep.has(nb)) q.push(nb);
+          // subtree focus: keep only selected nodes + their edges
+          for (const n of [...nodes.keys()]) if (!GRAPH_FILTER.has(n)) nodes.delete(n);
+          for (const k of [...edges.keys()]) {
+            const s = k.split("");
+            if (!GRAPH_FILTER.has(s[0]) || !GRAPH_FILTER.has(s[1])) edges.delete(k);
           }
-        }
-        for (const n of [...nodes.keys()]) if (!keep.has(n)) nodes.delete(n);
-        for (const k of [...edges.keys()]) {
-          const s = k.split("");
-          if (!keep.has(s[0]) || !keep.has(s[1])) edges.delete(k);
         }
         const preds = new Map();
         for (const k of edges.keys()) {
@@ -1503,8 +1474,8 @@
           ["True-wait median", s.median.toFixed(2) + "s"],
           ["p99", s.p99.toFixed(2) + "s"],
           ["max", s.max.toFixed(2) + "s"],
-          ["Stuck (!!!)", nf(data.stuck_count)],
-          ["Actors w/ idle span", nf(data.idle.with_idle)],
+          ["Stuck (≥ 10s, !!!)", nf(data.stuck_count)],
+          ["Idle-only actors", nf(data.idle.idle_only)],
         ];
         out.push(
           "<div class=cards>" +
@@ -1512,14 +1483,19 @@
             "</div>",
         );
 
-        out.push("<h2>Await roots — where each actor bottoms out</h2>");
+        out.push("<h2>Await roots — where each chain bottoms out</h2>");
         out.push(
-          "<p class=sub>True-wait roots (traced upstream along the most-stuck branch) plus long-running <b>idle</b> awaits, in one table.</p>",
+          "<p class=sub>Each actor’s current wait, traced upstream (most-stuck branch) to the span it ultimately blocks on.</p>",
         );
         out.push(
           info(
-            "<b>True wait vs idle.</b> await-tree marks a span “<code>!!!</code>” when a <em>non</em>-long-running future has awaited ≥ 10s (a genuine stall), and never marks long-running spans (idle sources, sink <code>consume_log</code>, barrier scheduling, the actor root) no matter how long they sit. A span ≥ 10s <em>without</em> <code>!!!</code> is therefore provably long-running → counted as <b>idle</b> and kept out of every wait statistic and chain. " +
-              "This table combines both: <b>true-wait roots</b> — where each actor’s chain bottoms out (<b>Source</b> = awaiting ingestion; <b>wait_pending_fetch_block</b> = reading state from S3 / block cache; <b>receive_barrier</b> = awaiting the next checkpoint barrier; <b>Wait For New Buffer Item</b> = a sink with nothing to send; <b>UpstreamSinkUnion</b> = reading a base table) — and rows suffixed “<b>(idle)</b>”, the long-running span an actor sits on (not backpressure). An actor can appear in both a true-wait root and an idle row, so counts may sum to more than the actor total.",
+            "<b>True wait vs idle.</b> await-tree marks a span “<code>!!!</code>” when a <em>non</em>-long-running future has awaited ≥ 10s (a genuine stall), and never marks long-running spans (idle sources, sink <code>consume_log</code>, barrier scheduling, the actor root) no matter how long they sit. This report uses that signal: a span ≥ 10s <em>without</em> <code>!!!</code> is provably long-running, so it’s counted as <b>idle</b>, kept out of every wait statistic and chain, and shown separately below. Everything here is <b>true wait</b>. " +
+              "Tracing each actor upstream (most-stuck branch) to a span it can’t blame on another actor gives its root: " +
+              "<b>Source</b> = awaiting ingestion (genuine backpressure when it’s a true wait; an idle source shows up as “Source (idle)” instead); " +
+              "<b>wait_pending_fetch_block</b> = reading state from S3 / the block cache; " +
+              "<b>receive_barrier</b> = waiting for the next checkpoint barrier (usually normal propagation); " +
+              "<b>Wait For New Buffer Item</b> = a sink with nothing to send; " +
+              "<b>UpstreamSinkUnion</b> = reading a base table fed by an upstream source/sink.",
           ),
         );
         out.push(
@@ -1527,6 +1503,23 @@
             data.root_split.map(([l, c]) => barRow(l, c, total)).join("") +
             "</tbody></table>",
         );
+
+        if (data.idle.with_idle) {
+          out.push("<h2>Idle (long-running) spans</h2>");
+          out.push(
+            "<p class=sub>Long-running futures (≥ 10s, unmarked by await-tree) — expected-long, <b>not</b> backpressure. Excluded from the waits above and from all chains; listed here only so they’re visible. Longest idle span: " +
+              data.idle.max_idle.toFixed(0) +
+              "s across " +
+              nf(data.idle.with_idle) +
+              " actors.</p>",
+          );
+          if (data.idle.split.length)
+            out.push(
+              "<table><thead><tr><th>Idle await</th><th class=num>Actors</th><th>Share</th></tr></thead><tbody>" +
+                data.idle.split.map(([l, c]) => barRow(l, c, total)).join("") +
+                "</tbody></table>",
+            );
+        }
 
         out.push("<h2>Longest await chains</h2>");
         out.push(
@@ -1858,113 +1851,35 @@
           .join("");
       }
 
-      // Build one actor from a serde-serialized await-tree (meta endpoint ?format=json). Unlike the text
-      // form, this carries the authoritative per-span `is_long_running` flag, so idle is exact even < 10s.
-      function actorFromTree(id, t) {
-        const root = t.tree || t; // Tree = { current, tree: <SpanNode>, detached: [<SpanNode>] }
-        const currentId = t.current;
-        const rootName = root && root.span ? root.span.name : "";
-        const h = rootName.match(ACTOR_HEADER);
-        const nodes = [];
-        const push = (node, depth) => {
-          const sec = node.elapsed_ns != null ? node.elapsed_ns / 1e9 : null;
-          nodes.push({
-            depth,
-            label: node.span ? node.span.name : "",
-            seconds: sec,
-            idle: !!(node.span && node.span.is_long_running), // authoritative — no >=10s heuristic needed
-            current: node.id === currentId,
-          });
-          for (const c of node.children || []) push(c, depth + 1);
-        };
-        for (const c of (root && root.children) || []) push(c, 1); // root span = actor header (uptime), not a wait
-        for (const d of t.detached || []) push(d, 1); // detached subtrees belong to the same actor
-        return {
-          id: +id,
-          name: h ? h[2] : rootName,
-          uptime: root && root.elapsed_ns != null ? root.elapsed_ns / 1e9 : 0,
-          nodes,
-        };
-      }
-      // Recognise a StackTraceResponse (the meta endpoint's JSON envelope). Returns structured actors when
-      // ?format=json was used (is_long_running present), else the flattened text of a ?format=text response.
-      function tryParseStackTrace(raw) {
-        let obj;
-        try {
-          obj = JSON.parse(raw);
-        } catch {
-          return null;
-        }
-        if (!obj || typeof obj !== "object" || !obj.actor_traces) return null;
-        const jvmLines = [];
-        for (const v of Object.values(obj.jvm_stack_traces || {})) jvmLines.push(...String(v).split(/\r?\n/));
-        const vals = Object.values(obj.actor_traces).filter((v) => typeof v === "string");
-        let structured = false;
-        if (vals.length) {
-          try {
-            const t = JSON.parse(vals[0]);
-            structured = !!(t && (t.tree || t.span)); // a value that is itself a serde tree => JSON format
-          } catch {}
-        }
-        if (structured) {
-          const actors = [];
-          for (const [id, val] of Object.entries(obj.actor_traces)) {
-            let t;
-            try {
-              t = JSON.parse(val);
-            } catch {
-              continue;
-            }
-            if (t) actors.push(actorFromTree(id, t));
-          }
-          return { structured: true, actors, jvm: parseJvm(jvmLines) };
-        }
-        // text format: concatenate the text dumps so the normal text parser handles them
-        const parts = vals.slice();
-        for (const v of Object.values(obj.barrier_worker_state || {})) parts.push(String(v));
-        return { structured: false, text: parts.join("\n\n") + "\n" + jvmLines.join("\n") };
-      }
-
-      async function finishReport(actors, jvmThreads, source, prefix, rawText, remember) {
-        if (!actors.length) {
-          hideProgress();
-          setError("0 actors parsed — is this an await-tree dump?");
-          return;
-        }
-        STATE = { actors, jvm: jvmThreads, source, prefix, rawText };
-        if (remember) rememberFile(source, rawText, actors.length); // persist (skipped for the ?demo edge case)
-        setProg(0.9, "Building report…");
-        await tick();
-        recompute(); // analyses the full set, then renders
-        setProg(1, "Done");
-        hideProgress();
-        loaderEl.style.display = "none";
-        reportEl.style.display = "block";
-        reportEl.tabIndex = -1;
-        reportEl.focus({ preventScroll: true }); // keep paste working in report view
-      }
-
-      // Parse + analyse the ENTIRE input. Accepts a plain text dump OR the meta endpoint's JSON envelope
-      // (structured, when fetched with ?format=json — then the exact is_long_running flag is used).
-      async function runPipeline(raw, source, { remember = true } = {}) {
+      // Parse + analyse the ENTIRE file. Async only so the progress bar can update; no sampling.
+      async function runPipeline(text, source, { remember = true } = {}) {
         try {
           if (progEl.hidden) showProgress(source);
           setProg(0.28, "Preparing…");
           await tick();
-          const st = tryParseStackTrace(raw);
-          if (st && st.structured) {
-            await computeAll(st.actors, (f) => setProg(0.65 + 0.2 * f, "Analysing actors…"));
-            await finishReport(st.actors, st.jvm, source, 0, raw, remember);
-            return;
-          }
-          const text = st ? st.text : raw; // text-format envelope -> flattened; else a raw text dump
           let lines = text.split(/\r?\n/);
           const sp = stripUniformPrefix(lines);
           lines = sp.lines;
           const { tree, jvm } = splitSections(lines);
           const actors = await parseActors(tree, (f) => setProg(0.3 + 0.35 * f, "Parsing actors…"));
           await computeAll(actors, (f) => setProg(0.65 + 0.2 * f, "Analysing actors…"));
-          await finishReport(actors, parseJvm(jvm), source, sp.prefix, raw, remember);
+          const jvmThreads = parseJvm(jvm);
+          if (!actors.length) {
+            hideProgress();
+            setError("0 actors parsed — is this an await-tree dump?");
+            return;
+          }
+          STATE = { actors, jvm: jvmThreads, source, prefix: sp.prefix, rawText: text };
+          if (remember) rememberFile(source, text, actors.length); // persist (skipped for the ?demo edge case)
+          setProg(0.9, "Building report…");
+          await tick();
+          recompute(); // analyses the full set, then renders
+          setProg(1, "Done");
+          hideProgress();
+          loaderEl.style.display = "none";
+          reportEl.style.display = "block";
+          reportEl.tabIndex = -1;
+          reportEl.focus({ preventScroll: true }); // keep paste working in report view
         } catch (e) {
           console.error(e);
           hideProgress();
@@ -2159,16 +2074,29 @@
         }
         setMetaError("");
         const base = /^https?:\/\//.test(hostport) ? hostport : "http://" + hostport;
-        // ?format=json returns per-span is_long_running, so idle is exact (even < 10s) rather than inferred.
-        const url = base.replace(/\/+$/, "") + "/api/monitor/await_tree/?format=json";
+        const url = base.replace(/\/+$/, "") + "/api/monitor/await_tree/"; // trailing slash required by the meta API
         const name = hostport + " @ " + fetchStamp(); // timestamped so repeated fetches don't overwrite each other
         showProgress(name);
         setProg(0.1, "Fetching await-tree…");
         try {
-          const res = await fetch(url, { headers: { Accept: "application/json" } });
+          const res = await fetch(url, { headers: { Accept: "application/json, text/plain, */*" } });
           if (!res.ok) throw new Error("HTTP " + res.status);
           const raw = await res.text();
-          runPipeline(raw, name); // runPipeline detects the StackTraceResponse envelope (json or text)
+          let text = raw;
+          try {
+            // meta API returns JSON; gather the tree text out of it
+            const j = JSON.parse(raw),
+              parts = [];
+            const walk = (v) => {
+              if (typeof v === "string") {
+                if (/Actor \d+:|\[\d[\d.]*(ms|s)\]/.test(v)) parts.push(v);
+              } else if (Array.isArray(v)) v.forEach(walk);
+              else if (v && typeof v === "object") Object.values(v).forEach(walk);
+            };
+            walk(j);
+            if (parts.length) text = parts.join("\n\n");
+          } catch (_) {}
+          runPipeline(text, name);
         } catch (err) {
           hideProgress();
           setMetaError(
