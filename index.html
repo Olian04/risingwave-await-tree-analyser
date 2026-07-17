@@ -719,7 +719,7 @@
       };
 
       const tick = () => new Promise((r) => setTimeout(r, 0)); // yield to the event loop (keeps progress bar live)
-      const STUCK_S = 5; // fixed, non-configurable: an actor waiting >=5s is stuck for any sane barrier interval
+      const STUCK_S = LONG_RUNNING_S; // matches await-tree's own "!!!" threshold: a true wait >= 10s is stuck
       function parseDuration(v, u) {
         return parseFloat(v) * SEC[u];
       }
@@ -777,10 +777,10 @@
           const line = treeLines[i];
           if (line && line.trim()) {
             // A real actor tree is: an "Actor N: `name`" header at column 0, then its spans INDENTED
-            // beneath it. So any non-indented line is a boundary: either a new actor header, or a
-            // trailing/background section — "[Global Barrier Worker]", bare "Global Barrier Worker [..s]",
-            // "[RPC ...]", etc. Treating every depth-0 non-header line as a boundary (cur = null) keeps
-            // those background tasks out of the last actor, regardless of whether they're bracketed.
+            // beneath it. So any non-indented line is a boundary: a new actor header, a "[Detached N]"
+            // marker (a detached subtree of the SAME actor — its other select-branch input futures),
+            // or a trailing/background section ("[Global Barrier Worker]", bare "Global Barrier Worker
+            // [..s]", "[RPC ...]"). Detached markers keep the current actor; everything else ends it.
             const indent = leadingWs(line);
             const h = indent === 0 ? line.match(ACTOR_HEADER) : null;
             if (h) {
@@ -789,19 +789,27 @@
               cur = { id: +h[1], name: h[2], uptime: d ? parseDuration(d[2], d[3]) : 0, nodes: [] };
               actors.push(cur);
             } else if (indent === 0) {
-              cur = null; // top-level line that isn't an actor header -> not part of any actor's tree
+              // "[Detached N]" continues the current actor (its spans follow, indented); any other
+              // top-level line is a real boundary and must not attach to the previous actor.
+              if (!/^\[Detached\b/.test(line)) cur = null;
             } else if (cur) {
-              // an indented span inside the current actor's tree
-              const d = line.match(DURATION_RE);
+              // an indented span (main tree OR a detached subtree) of the current actor.
+              // Strip the "  <== current" marker (the currently-polling span) so the duration, which
+              // then sits at end-of-line, parses — and record that this span is the active one.
+              const isCurrent = /<==\s*current\s*$/.test(line);
+              const raw = isCurrent ? line.replace(/\s*<==\s*current\s*$/, "") : line;
+              const d = raw.match(DURATION_RE);
               const sec = d ? parseDuration(d[2], d[3]) : null;
               const bang = !!(d && d[1]); // "!!!" => a genuinely stuck (non-long-running) true wait
-              // idle = provably long-running: >= 10s WITHOUT the "!!!" marker (the only way that happens).
-              // "!!!" spans and sub-10s spans are treated as true waits.
+              // Per-span idle flag: idle = long-running. From text that is provably true when a span is
+              // >= 10s WITHOUT "!!!" (await-tree only omits the marker on long-running spans). "!!!"
+              // spans (true waits, even >= 10s) and sub-10s spans are NOT idle.
               cur.nodes.push({
                 depth: indent,
-                label: line.trim(),
+                label: raw.trim(),
                 seconds: sec,
                 idle: sec != null && !bang && sec >= LONG_RUNNING_S,
+                current: isCurrent,
               });
             }
           }
@@ -878,6 +886,9 @@
           if (m) up.push({ id: +m[1], sec: nd.seconds });
         }
         a.upstreams = up;
+        // "stuck" = the actor carries a genuine >= 10s true-wait span — exactly the spans await-tree
+        // itself marks "!!!" (a non-long-running future awaiting >= 10s). Idle spans never count.
+        a.stuck = n.some((x) => x.seconds != null && !x.idle && x.seconds >= LONG_RUNNING_S);
         delete a.nodes; // free memory on big dumps
       }
 
@@ -989,7 +1000,7 @@
             const label = hi === Infinity ? ">" + lo + " s" : lo + "–" + hi + " s";
             data.distribution.push([label, dist.get(i) || 0]);
           }
-          data.stuck_count = actors.reduce((c, a) => c + (a.epochWait >= STUCK_S ? 1 : 0), 0);
+          data.stuck_count = actors.reduce((c, a) => c + (a.stuck ? 1 : 0), 0);
 
           const byPipe = new Map();
           for (const a of actors) {
@@ -1462,7 +1473,7 @@
           ["True-wait median", s.median.toFixed(2) + "s"],
           ["p99", s.p99.toFixed(2) + "s"],
           ["max", s.max.toFixed(2) + "s"],
-          ["Stuck ≥ 5s", nf(data.stuck_count)],
+          ["Stuck (≥ 10s, !!!)", nf(data.stuck_count)],
           ["Idle-only actors", nf(data.idle.idle_only)],
         ];
         out.push(
@@ -1558,7 +1569,7 @@
         out.push("<h2>Epoch-wait distribution</h2>");
         out.push(
           info(
-            "How long actors have been in their current step. At rest this is bounded by the barrier interval (~1s), so a healthy cluster sits in the <b>0–1s</b> buckets. Actors in the <b>5s+</b> buckets indicate a real freeze or heavy backpressure. If everything is ≤~1–2s, the dump was taken off-peak and won't show the incident's worst moment — recapture while latency is climbing.",
+            "How long actors have been in their current step (true wait only). At rest this is bounded by the barrier interval (~1s), so a healthy cluster sits in the <b>0–1s</b> buckets. The <b>10s+</b> buckets are where await-tree stamps “!!!” — a genuine freeze or heavy backpressure. If everything is ≤~1–2s, the dump was taken off-peak and won't show the incident's worst moment — recapture while latency is climbing.",
           ),
         );
         out.push(
@@ -1840,7 +1851,7 @@
       }
 
       // Parse + analyse the ENTIRE file. Async only so the progress bar can update; no sampling.
-      async function runPipeline(text, source) {
+      async function runPipeline(text, source, { remember = true } = {}) {
         try {
           if (progEl.hidden) showProgress(source);
           setProg(0.28, "Preparing…");
@@ -1858,7 +1869,7 @@
             return;
           }
           STATE = { actors, jvm: jvmThreads, source, prefix: sp.prefix, rawText: text };
-          rememberFile(source, text, actors.length); // persist for the "recently loaded" list, no matter the load path
+          if (remember) rememberFile(source, text, actors.length); // persist (skipped for the ?demo edge case)
           setProg(0.9, "Building report…");
           await tick();
           recompute(); // analyses the full set, then renders
@@ -2253,7 +2264,7 @@
             if (!r.ok) throw new Error("HTTP " + r.status);
             return r.text();
           })
-          .then((t) => runPipeline(t, demoName))
+          .then((t) => runPipeline(t, demoName, { remember: false })) // demo is an edge case; don't persist it
           .catch((e) => {
             hideProgress();
             setError("Could not load demo dump: " + e.message);
