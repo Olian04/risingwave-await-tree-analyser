@@ -421,21 +421,6 @@
         gap: 10px;
         margin: 4px 0 8px;
       }
-      .graphbar label {
-        color: var(--mut);
-        font-size: 12.5px;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-      }
-      .graphbar select {
-        background: var(--panel);
-        border: 1px solid var(--bd);
-        color: var(--tx);
-        border-radius: 6px;
-        padding: 4px 8px;
-        font: inherit;
-      }
       .graphbar button {
         padding: 4px 10px;
       }
@@ -583,6 +568,64 @@
         border-radius: 4px;
         padding: 0 4px;
       }
+      #recent {
+        width: 100%;
+      }
+      #recent .recenthdr {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        color: var(--mut);
+        font-size: 12.5px;
+        margin-bottom: 8px;
+      }
+      #recent .recenthdr button {
+        background: none;
+        border: none;
+        color: var(--mut);
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+        text-decoration: underline;
+        padding: 0;
+      }
+      #recent .recenthdr button:hover {
+        color: var(--tx);
+      }
+      #recentlist {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .recentrow {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        width: 100%;
+        text-align: left;
+        background: var(--panel);
+        border: 1px solid var(--bd);
+        border-radius: 8px;
+        padding: 8px 12px;
+        color: var(--tx);
+        font: inherit;
+        cursor: pointer;
+      }
+      .recentrow:hover {
+        border-color: var(--accent);
+        background: var(--panel2);
+      }
+      .recentrow .rname {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .recentrow .rmeta {
+        color: var(--mut);
+        font-size: 12px;
+        white-space: nowrap;
+      }
     </style>
   </head>
   <body>
@@ -615,6 +658,13 @@
           <div class="pname" id="pname"></div>
           <div class="plabel" id="plabel">Reading…</div>
           <div class="pbar"><span id="pfill"></span></div>
+        </div>
+        <div id="recent" hidden>
+          <div class="recenthdr">
+            <span>Recently loaded</span>
+            <button id="recentclear" type="button">clear</button>
+          </div>
+          <div id="recentlist"></div>
         </div>
       </div>
     </div>
@@ -1350,21 +1400,12 @@
         out.push("<h2>Longest await chains</h2>");
         out.push(
           info(
-            "A graph of the chains with the longest waits. Each <b>node</b> is a pipeline; an <b>edge</b> connects a downstream pipeline to the upstream one it awaits — downstream on the left, roots on the right. <b>Thicker, warmer (amber→red) edges</b> mark longer waits. Root nodes on the right are where each chain bottoms out, coloured by what they await; <b>fan-in</b> onto one node marks a shared upstream. The <b>Planar</b> layout minimises crossing edges; <b>drag</b> a node to rearrange it (switches to Custom); <b>double-click</b> a node to focus its connected subtree, then “show all nodes” to reset. Hover a node/edge for exact values.",
+            "A graph of the chains with the longest waits. Each <b>node</b> is a pipeline; an <b>edge</b> connects a downstream pipeline to the upstream one it awaits — downstream on the left, roots on the right. <b>Thicker, warmer (amber→red) edges</b> mark longer waits. Root nodes on the right are where each chain bottoms out, coloured by what they await; <b>fan-in</b> onto one node marks a shared upstream. The layout minimises crossing edges; <b>drag</b> a node to rearrange it; <b>double-click</b> a node to focus its connected subtree, then “show all nodes” to reset. Hover a node/edge for exact values.",
           ),
         );
-        out.push(
-          "<div class=graphbar><label>Layout <select id=glayout>" +
-            "<option value=planar" +
-            (LAYOUT !== "custom" ? " selected" : "") +
-            ">Planar</option>" +
-            "<option value=custom disabled" +
-            (LAYOUT === "custom" ? " selected" : "") +
-            ">Custom</option>" +
-            "</select></label>" +
-            (GRAPH_FILTER ? " <button id=gfilterclear>show all nodes</button>" : "") +
-            "</div>",
-        );
+        if (GRAPH_FILTER) {
+          out.push("<div class=graphbar><button id=gfilterclear>show all nodes</button></div>");
+        }
         out.push("<div class=graphwrap>" + graphSvg(data.chains, SHOWN.graph) + "</div>");
         out.push(moreBtn("graph", data.chains.length));
         out.push(
@@ -1566,6 +1607,70 @@
         if (label != null) plabel.textContent = label + " " + (p * 100).toFixed(0) + "%";
       }
 
+      // ---- Recently-loaded files (localStorage, most-recent-first, capped at 5) ----
+      const RECENT_KEY = "awaitTreeRecentFiles";
+      const RECENT_MAX = 5;
+      function loadRecent() {
+        try {
+          const a = JSON.parse(localStorage.getItem(RECENT_KEY) || "[]");
+          return Array.isArray(a) ? a : [];
+        } catch (_) {
+          return [];
+        }
+      }
+      // Save, shedding the oldest entries if we hit the storage quota (dumps can be large).
+      // If even the newest single entry won't fit, leave any existing list untouched rather than wiping it.
+      function saveRecent(list) {
+        for (let items = list.slice(); items.length; items.pop()) {
+          try {
+            localStorage.setItem(RECENT_KEY, JSON.stringify(items));
+            return;
+          } catch (_) {
+            /* quota exceeded -> drop the oldest and retry */
+          }
+        }
+      }
+      // Record a loaded dump: dedupe by name, move to the top, cap at RECENT_MAX.
+      function rememberFile(name, text) {
+        name = name || "dump";
+        let list = loadRecent().filter((f) => f.name !== name);
+        list.unshift({ name, text, ts: Date.now(), actors: STATE ? STATE.actors.length : null });
+        list = list.slice(0, RECENT_MAX);
+        saveRecent(list);
+        renderRecent();
+      }
+      function relTime(ts) {
+        const s = Math.max(0, (Date.now() - ts) / 1000);
+        if (s < 60) return "just now";
+        if (s < 3600) return Math.floor(s / 60) + "m ago";
+        if (s < 86400) return Math.floor(s / 3600) + "h ago";
+        return Math.floor(s / 86400) + "d ago";
+      }
+      function renderRecent() {
+        const list = loadRecent();
+        const box = $("recent");
+        if (!list.length) {
+          box.hidden = true;
+          $("recentlist").innerHTML = "";
+          return;
+        }
+        box.hidden = false;
+        $("recentlist").innerHTML = list
+          .map((f, i) => {
+            const meta = (f.actors != null ? nf(f.actors) + " actors · " : "") + relTime(f.ts);
+            return (
+              '<button class="recentrow" type="button" data-idx="' +
+              i +
+              '"><span class="rname">' +
+              esc(f.name) +
+              '</span><span class="rmeta">' +
+              esc(meta) +
+              "</span></button>"
+            );
+          })
+          .join("");
+      }
+
       // Parse + analyse the ENTIRE file. Async only so the progress bar can update; no sampling.
       async function runPipeline(text, source) {
         try {
@@ -1585,6 +1690,7 @@
             return;
           }
           STATE = { actors, jvm: jvmThreads, source, prefix: sp.prefix };
+          rememberFile(source, text); // persist for the "recently loaded" list, no matter the load path
           setProg(0.9, "Building report…");
           await tick();
           recompute(); // analyses the full set, then renders
@@ -1905,23 +2011,28 @@
         tstate(inp.dataset.sec).filter = inp.value;
         draw();
       });
-      $("body").addEventListener("change", (e) => {
-        if (e.target && e.target.id === "glayout") {
-          const v = e.target.value;
-          if (v !== "custom") {
-            LAYOUT = v;
-            CUSTOM_POS = {};
-            draw();
-          }
-        }
-      });
       $("another").addEventListener("click", () => {
         reportEl.style.display = "none";
         loaderEl.style.display = "flex";
         dropEl.querySelector(".big").textContent = "Drop a RisingWave await-tree dump here";
         STATE = null;
         fileEl.value = "";
+        renderRecent();
         dropEl.focus();
+      });
+
+      // click a recent entry -> reload it (runPipeline re-remembers it, moving it back to the top)
+      $("recentlist").addEventListener("click", (e) => {
+        const row = e.target.closest(".recentrow");
+        if (!row) return;
+        const f = loadRecent()[+row.dataset.idx];
+        if (f) runPipeline(f.text, f.name);
+      });
+      $("recentclear").addEventListener("click", () => {
+        try {
+          localStorage.removeItem(RECENT_KEY);
+        } catch (_) {}
+        renderRecent();
       });
       $("dljson").addEventListener("click", () => {
         if (!STATE) return;
@@ -1936,6 +2047,7 @@
       });
 
       // focus the loader on first load so paste works immediately
+      renderRecent();
       dropEl.focus();
 
       // ?demo -> auto-load the bundled demo dump and open the report on page load
