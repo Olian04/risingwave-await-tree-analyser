@@ -687,6 +687,7 @@
           <button id="dldump">Download dump</button>
           <button id="dljson">Download JSON</button>
           <button id="another">Load another</button>
+          <button id="exitdemo" hidden>Load your own dump →</button>
         </div>
       </div>
       <div class="wrap" id="body"></div>
@@ -2254,6 +2255,15 @@
 
       // ?demo -> auto-load the bundled demo dump and open the report on page load
       if (new URLSearchParams(location.search).has("demo")) {
+        // In demo mode the report is read-only sample data: swap the download / "Load another" buttons
+        // for a single button that drops the query string and returns to a clean load page.
+        for (const id of ["dldump", "dljson", "another"]) $(id).hidden = true;
+        const exit = $("exitdemo");
+        exit.hidden = false;
+        exit.addEventListener("click", () => {
+          location.href = location.pathname + location.hash; // strip "?demo" -> normal load page
+        });
+
         const demoName = "await_tree.demo.dump @ " + fetchStamp();
         showProgress(demoName);
         setProg(0.1, "Loading demo…");
