@@ -108,11 +108,29 @@ th.th-sort:hover{color:var(--tx);}
 tr.filtrow td{padding:6px 8px;background:var(--panel);border-bottom:1px solid var(--bd);}
 input.tfilter{width:100%;background:var(--panel2);border:1px solid var(--bd);color:var(--tx);border-radius:6px;padding:4px 8px;font:inherit;font-size:12.5px;}
 input.tfilter:focus{outline:none;border-color:var(--accent);}
+.loadercol{width:min(720px,92vw);display:flex;flex-direction:column;gap:16px;}
+#metabar{border:1px solid var(--bd);border-radius:12px;background:var(--panel);padding:16px 18px;}
+#metabar>label{display:block;color:var(--mut);font-size:12.5px;margin-bottom:8px;}
+#metabar .metarow{display:flex;gap:8px;}
+#metabar input{flex:1;background:var(--panel2);border:1px solid var(--bd);color:var(--tx);border-radius:8px;padding:8px 10px;font:inherit;}
+#metabar input:focus{outline:none;border-color:var(--accent);}
+#metabar button{white-space:nowrap;padding:8px 14px;}
+#metabar .metahint{color:var(--mut);font-size:12px;line-height:1.6;margin-top:8px;}
+#metabar code{background:var(--panel2);border:1px solid var(--bd);border-radius:4px;padding:0 4px;}
 </style>
 </head>
 <body>
 
 <div id="loader">
+ <div class="loadercol">
+  <div id="metabar">
+    <label for="metahost">RisingWave meta node</label>
+    <div class="metarow">
+      <input id="metahost" value="localhost:5691" spellcheck="false" autocapitalize="off" autocomplete="off">
+      <button id="metaload">Fetch await-tree</button>
+    </div>
+    <div class="metahint">GET <code>/api/monitor/await_tree</code> from the meta node (same call the RW dashboard makes). Needs network access to the meta node; a browser may block it via CORS — paste the dump if so.</div>
+  </div>
   <div class="drop" id="drop" tabindex="0" role="button" aria-label="Load an await-tree dump">
     <div class="icon">⬇</div>
     <div class="big">Drop a RisingWave await-tree dump here</div>
@@ -129,6 +147,7 @@ input.tfilter:focus{outline:none;border-color:var(--accent);}
     <div class="plabel" id="plabel">Reading…</div>
     <div class="pbar"><span id="pfill"></span></div>
   </div>
+ </div>
 </div>
 
 <div id="report">
@@ -197,15 +216,19 @@ async function parseActors(treeLines, onProg){
   const actors=[]; let cur=null; const N=treeLines.length;
   for (let i=0;i<N;i++){
     const line=treeLines[i];
-    if (line && line.trim() && !line.startsWith("[Actor ")){
-      const h = line.match(ACTOR_HEADER);
-      if (h){
-        const d = line.match(DURATION_RE);
-        cur = {id:+h[1], name:h[2], uptime:d?parseDuration(d[1],d[2]):0, nodes:[]};
-        actors.push(cur);
-      } else if (cur){                          // ignore preamble/heading rows before first actor
-        const d = line.match(DURATION_RE);
-        cur.nodes.push({depth:leadingWs(line), label:line.trim(), seconds:d?parseDuration(d[1],d[2]):null});
+    if (line && line.trim()){
+      if (line.startsWith("[")){                // section header: [Actor N], [Global Barrier Worker], [RPC ...] ...
+        cur=null;                               // stop attaching lines to the previous actor
+      } else {
+        const h = line.match(ACTOR_HEADER);
+        if (h){
+          const d = line.match(DURATION_RE);
+          cur = {id:+h[1], name:h[2], uptime:d?parseDuration(d[1],d[2]):0, nodes:[]};
+          actors.push(cur);
+        } else if (cur){                        // a node line inside the current actor's tree
+          const d = line.match(DURATION_RE);
+          cur.nodes.push({depth:leadingWs(line), label:line.trim(), seconds:d?parseDuration(d[1],d[2]):null});
+        }
       }
     }
     if (onProg && (i & 65535)===0){ onProg(i/N); await tick(); }
@@ -418,9 +441,16 @@ function edgeColor(t){
   return `rgb(${c[0]},${c[1]},${c[2]})`;
 }
 
-const GNODE_W=182, GNODE_H=44;   // shared by graphSvg and the drag handler
-let LAYOUT="severity";   // "severity" | "planar" | "custom"
+const GNODE_W=182, GNODE_H=44, GCOL_W=232, GROW_H=66;   // shared by graphSvg and the drag handler
+// Edge path: run flat along the source row through the intervening (clear) columns,
+// then do the whole vertical S-bend inside the last gap before the target node.
+function gedgeD(x1,y1,x2,y2){
+  const gap=GCOL_W-GNODE_W, xt=Math.max(x1, x2-gap), c=(x2-xt)*0.5;
+  return `M${x1},${y1} L${xt},${y1} C${xt+c},${y1} ${x2-c},${y2} ${x2},${y2}`;
+}
+let LAYOUT="planar";     // "planar" | "custom"  (severity layout deprecated)
 let CUSTOM_POS={};        // node name -> [x,y] in custom mode
+let GRAPH_FILTER=null;    // Set of node names to restrict the graph to (subtree focus), or null
 
 // median-heuristic crossing reduction for a layered DAG (fewer edge crossings ≈ planar)
 function planarOrder(cols, maxLayer, preds, succ){
@@ -471,6 +501,10 @@ function graphSvg(chains, limit){
       if(i>0){ const f=ch.hops[i-1][0], k=f+""+nm; edges.set(k, Math.max(edges.get(k)||0, ch.hops[i-1][1])); }
     }
   }
+  if(GRAPH_FILTER){                             // subtree focus: keep only selected nodes + their edges
+    for(const n of [...nodes.keys()]) if(!GRAPH_FILTER.has(n)) nodes.delete(n);
+    for(const k of [...edges.keys()]){ const s=k.split(""); if(!GRAPH_FILTER.has(s[0])||!GRAPH_FILTER.has(s[1])) edges.delete(k); }
+  }
   const preds=new Map();
   for(const k of edges.keys()){ const [f,t]=k.split(""); pushMap(preds,t,f); }
   const succ=new Map(); for(const [t,fs] of preds) for(const f of fs) pushMap(succ,f,t);
@@ -481,24 +515,20 @@ function graphSvg(chains, limit){
   const cols=new Map(); let maxLayer=0;
   for(const [n,l] of layer){ pushMap(cols,l,n); if(l>maxLayer) maxLayer=l; }
   const NW=GNODE_W,NH=GNODE_H,COLW=232,ROWH=66,PADX=16,PADY=16;
-  for(let l=0;l<=maxLayer;l++) (cols.get(l)||[]).sort((a,b)=>nodes.get(b).wait-nodes.get(a).wait);   // severity order
-  const order = (LAYOUT==="planar") ? planarOrder(cols,maxLayer,preds,succ) : cols;
+  for(let l=0;l<=maxLayer;l++) (cols.get(l)||[]).sort((a,b)=>nodes.get(b).wait-nodes.get(a).wait);   // init order (by wait)
+  const order = planarOrder(cols,maxLayer,preds,succ);
+  const yy = assignY(order,maxLayer,preds,succ,ROWH);
   const pos=new Map();
-  if(LAYOUT==="planar"){
-    const yy=assignY(order,maxLayer,preds,succ,ROWH);
-    for(let l=0;l<=maxLayer;l++) order.get(l).forEach(n=>pos.set(n,{x:PADX+l*COLW, y:PADY+yy.get(n)}));
-  } else {
-    for(let l=0;l<=maxLayer;l++) (order.get(l)||[]).forEach((n,i)=>pos.set(n,{x:PADX+l*COLW, y:PADY+i*ROWH}));
-  }
+  for(let l=0;l<=maxLayer;l++) order.get(l).forEach(n=>pos.set(n,{x:PADX+l*COLW, y:PADY+yy.get(n)}));
   if(LAYOUT==="custom"){ for(const n of nodes.keys()){ const c=CUSTOM_POS[n]; if(c) pos.set(n,{x:c[0],y:c[1]}); } }
   let W=0,H=0; for(const p of pos.values()){ if(p.x+NW>W) W=p.x+NW; if(p.y+NH>H) H=p.y+NH; } W+=PADX; H+=PADY;
   let maxEW=0.001; for(const w of edges.values()) if(w>maxEW) maxEW=w;
   let s=`<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role=img aria-label="Backpressure chain graph">`;
   // no arrowheads: direction is implicit (downstream on the left, roots on the right)
   for(const [k,w] of edges){ const [f,t]=k.split(""); const a=pos.get(f),b=pos.get(t); if(!a||!b) continue;
-    const x1=a.x+NW, y1=a.y+NH/2, x2=b.x, y2=b.y+NH/2, mx=(x1+x2)/2;
+    const x1=a.x+NW, y1=a.y+NH/2, x2=b.x, y2=b.y+NH/2;
     const sw=(1.2+5*(w/maxEW)).toFixed(1);
-    s+=`<path class=gedge data-from="${esc(f)}" data-to="${esc(t)}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill=none stroke="${edgeColor(w/maxEW)}" stroke-opacity="0.85" stroke-width=${sw}><title>${esc(f)} → ${esc(t)}: ${w.toFixed(2)}s</title></path>`; }
+    s+=`<path class=gedge data-from="${esc(f)}" data-to="${esc(t)}" d="${gedgeD(x1,y1,x2,y2)}" fill=none stroke="${edgeColor(w/maxEW)}" stroke-opacity="0.85" stroke-width=${sw}><title>${esc(f)} → ${esc(t)}: ${w.toFixed(2)}s</title></path>`; }
   for(const [n,nd] of nodes){ const p=pos.get(n), hex=catHex(nd.cat); const disp=n.length>24?n.slice(0,23)+"…":n;
     s+=`<g class=gnode data-node="${esc(n)}" data-x="${p.x}" data-y="${p.y}" transform="translate(${p.x},${p.y})">`
      + `<title>${esc(n)} — ${esc(nd.cat)} — ${nd.wait.toFixed(2)}s (drag to move)</title>`
@@ -517,20 +547,25 @@ function renderReport(data){
     ["p99",s.p99.toFixed(2)+"s"],["max",s.max.toFixed(2)+"s"],["Actors ≥ 5s",nf(data.stuck_count)]];
   out.push('<div class=cards>'+cards.map(([k,v])=>`<div class=card><div class=k>${k}</div><div class=v>${v}</div></div>`).join("")+'</div>');
 
-  out.push("<h2>Backpressure roots — where every chain bottoms out</h2>");
-  out.push('<p class=sub>Each actor’s wait traced upstream (most-stuck branch) to its terminal await.</p>');
-  out.push(info("Every actor's wait is followed <b>upstream</b> — at each hop we take the input branch that is most stuck — until it reaches a terminal it can't blame on another actor. That terminal is the real bottleneck. <b>Source</b> = waiting on ingestion (CDC / Kafka / etc.); <b>wait_pending_fetch_block</b> = waiting on the state store (S3 / block cache); <b>receive_barrier</b> = waiting for the checkpoint barrier (usually just normal propagation); <b>Wait For New Buffer Item</b> = a sink starved for input; <b>UpstreamSinkUnion</b> = reading a base table fed by an upstream source/sink. A high <b>Source</b> share means the workload is ingestion-bound; a high storage share points at the cache / object store."));
-  out.push("<table><thead><tr><th>Terminal await</th><th class=num>Actors</th><th>Share</th></tr></thead><tbody>"
+  out.push("<h2>Await roots — where each chain bottoms out</h2>");
+  out.push('<p class=sub>Each actor’s current wait, traced upstream (most-stuck branch) to the span it ultimately blocks on.</p>');
+  out.push(info("An await-tree span’s duration is just how long that future has been awaiting — it is <b>not</b> by itself “backpressure”. Following each actor upstream (most-stuck branch) to a span it can’t blame on another actor gives its root: "
+    + "<b>Source</b> = awaiting ingestion — the ambiguous one: it can be genuine backpressure <em>or</em> simply an idle source with no new upstream data (the tree alone can’t distinguish — corroborate with source throughput &amp; barrier latency); "
+    + "<b>wait_pending_fetch_block</b> = reading state from S3 / the block cache; "
+    + "<b>receive_barrier</b> = waiting for the next checkpoint barrier (usually normal propagation); "
+    + "<b>Wait For New Buffer Item</b> = a sink with nothing to send; "
+    + "<b>UpstreamSinkUnion</b> = reading a base table fed by an upstream source/sink. "
+    + "A high <b>Source</b> share means ingestion-bound — confirm data is actually flowing before calling it backpressure."));
+  out.push("<table><thead><tr><th>Root await</th><th class=num>Actors</th><th>Share</th></tr></thead><tbody>"
     + data.root_split.map(([l,c])=>barRow(l,c,total)).join("")+"</tbody></table>");
 
-  out.push("<h2>Heaviest backpressure chains</h2>");
-  out.push(info("A graph of the worst chains. Each <b>node</b> is a pipeline; an <b>edge</b> connects a downstream (starved) pipeline to the upstream one it waits on — downstream on the left, roots on the right. <b>Thicker, warmer (amber→red) edges</b> carry more backpressure weight. Root nodes on the right are where backpressure originates, coloured by what they're waiting on; <b>fan-in</b> onto one node means it's a shared bottleneck. <b>Layout</b>: <b>Severity</b> stacks nodes by wait; <b>Planar</b> reorders them to minimise crossing edges; dragging any node switches to <b>Custom</b>. Hover a node/edge for exact values."));
+  out.push("<h2>Longest await chains</h2>");
+  out.push(info("A graph of the chains with the longest waits. Each <b>node</b> is a pipeline; an <b>edge</b> connects a downstream pipeline to the upstream one it awaits — downstream on the left, roots on the right. <b>Thicker, warmer (amber→red) edges</b> mark longer waits. Root nodes on the right are where each chain bottoms out, coloured by what they await; <b>fan-in</b> onto one node marks a shared upstream. The <b>Planar</b> layout minimises crossing edges; <b>drag</b> a node to rearrange it (switches to Custom); <b>double-click</b> a node to focus its connected subtree, then “show all nodes” to reset. Hover a node/edge for exact values."));
   out.push('<div class=graphbar><label>Layout <select id=glayout>'
-    + '<option value=severity'+(LAYOUT==="severity"?" selected":"")+'>Severity</option>'
-    + '<option value=planar'+(LAYOUT==="planar"?" selected":"")+'>Planar</option>'
+    + '<option value=planar'+(LAYOUT!=="custom"?" selected":"")+'>Planar</option>'
     + '<option value=custom disabled'+(LAYOUT==="custom"?" selected":"")+'>Custom</option>'
     + '</select></label>'
-    + (LAYOUT==="custom"?' <button id=glayoutreset>reset layout</button>':'')
+    + (GRAPH_FILTER?' <button id=gfilterclear>show all nodes</button>':'')
     + '</div>');
   out.push('<div class=graphwrap>'+graphSvg(data.chains, SHOWN.graph)+'</div>');
   out.push(moreBtn("graph", data.chains.length));
@@ -541,7 +576,7 @@ function renderReport(data){
     + '<i><span class=sw style="background:#e05a5a"></span>storage fetch</i>'
     + '<i><span class=sw style="background:#3fb8a0"></span>starved sink</i>'
     + '<i><span class=sw style="background:#6b7280"></span>waiting on input</i>'
-    + '<i style="margin-left:auto"><span class=sw style="width:34px;background:linear-gradient(90deg,#3fb8a0,#e0a13c,#e05a5a)"></span>edge = backpressure weight (low→high)</i></div>');
+    + '<i style="margin-left:auto"><span class=sw style="width:34px;background:linear-gradient(90deg,#3fb8a0,#e0a13c,#e05a5a)"></span>edge = wait time (low→high)</i></div>');
 
   out.push("<h2>Worst chain per pipeline (downstream → upstream root)</h2>");
   out.push(info("For each of the slowest pipelines, its single most-stuck path traced to the root, with the wait at each hop. Read top→bottom: the first line is the slow pipeline; indented lines are successively further upstream. The badge shows what each hop is blocked on. Where the chain bottoms out is the cause — <b>Source/UpstreamSinkUnion</b> = ingestion, <b>wait_pending_fetch_block</b> = storage. Caveat: when the dump is off-peak (all waits near one barrier interval) the branch chosen at each tie is heuristic — trust the aggregate root split above more than any single path."));
@@ -669,8 +704,8 @@ function wireGraphDrag(){
     return m ? p.matrixTransform(m.inverse()) : {x:e.clientX,y:e.clientY}; };
   const updEdge=ed=>{ const a=nodeEls[ed.dataset.from], b=nodeEls[ed.dataset.to]; if(!a||!b) return;
     const ax=+a.dataset.x, ay=+a.dataset.y, bx=+b.dataset.x, by=+b.dataset.y;
-    const x1=ax+GNODE_W, y1=ay+GNODE_H/2, x2=bx, y2=by+GNODE_H/2, mx=(x1+x2)/2;
-    ed.setAttribute("d",`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`); };
+    const x1=ax+GNODE_W, y1=ay+GNODE_H/2, x2=bx, y2=by+GNODE_H/2;
+    ed.setAttribute("d", gedgeD(x1,y1,x2,y2)); };
   let drag=null;
   svg.addEventListener("pointerdown", e=>{
     const g=e.target.closest && e.target.closest(".gnode"); if(!g) return;
@@ -693,11 +728,21 @@ function wireGraphDrag(){
   const end=()=>{ if(!drag) return; try{ svg.releasePointerCapture(drag.id); }catch(_){} const moved=drag.moved; drag=null; if(moved) draw(); };
   svg.addEventListener("pointerup", end);
   svg.addEventListener("pointercancel", end);
+  // double-click a node -> focus its connected subtree (component), then re-layout
+  svg.addEventListener("dblclick", e=>{
+    const g=e.target.closest && e.target.closest(".gnode"); if(!g) return;
+    e.preventDefault();
+    const adj={}; const add=(a,b)=>{ (adj[a]=adj[a]||[]).push(b); };
+    edges.forEach(ed=>{ add(ed.dataset.from,ed.dataset.to); add(ed.dataset.to,ed.dataset.from); });
+    const seen=new Set([g.dataset.node]), q=[g.dataset.node];
+    while(q.length){ const c=q.shift(); for(const nb of (adj[c]||[])) if(!seen.has(nb)){ seen.add(nb); q.push(nb); } }
+    GRAPH_FILTER=seen; LAYOUT="planar"; CUSTOM_POS={}; draw();
+  });
 }
 function recompute(){
   if (!STATE) return;
   STATE._data = analyse(STATE.actors, STATE.jvm, 15);
-  TABLE_STATE={}; LAYOUT="severity"; CUSTOM_POS={};   // reset sort/filter/layout for the new file
+  TABLE_STATE={}; LAYOUT="planar"; CUSTOM_POS={}; GRAPH_FILTER=null;   // reset sort/filter/layout for the new file
   $("fn").textContent = STATE.source;
   $("summary").textContent = `${nf(STATE.actors.length)} actors · ${nf(STATE.jvm.length)} JVM threads`
     + (STATE.prefix ? ` · stripped ${STATE.prefix}-char line prefix` : "");
@@ -712,6 +757,32 @@ function readFile(file){
   r.onerror = ()=>{ hideProgress(); setError("Could not read file."); };
   r.readAsText(file);
 }
+
+// fetch an await-tree dump straight from a RisingWave meta node (same call the dashboard makes)
+async function loadFromMeta(hostport){
+  hostport=(hostport||"").trim(); if(!hostport){ setError("Enter the meta node host:port."); return; }
+  const base = /^https?:\/\//.test(hostport) ? hostport : ("http://"+hostport);
+  const url = base.replace(/\/+$/,"") + "/api/monitor/await_tree";
+  showProgress(hostport); setProg(0.1,"Fetching await-tree…");
+  try{
+    const res = await fetch(url, {headers:{Accept:"application/json, text/plain, */*"}});
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    const raw = await res.text();
+    let text = raw;
+    try{                                   // meta API returns JSON; gather the tree text out of it
+      const j = JSON.parse(raw), parts=[];
+      const walk=v=>{ if(typeof v==="string"){ if(/Actor \d+:|\[\d[\d.]*(ms|s)\]/.test(v)) parts.push(v); }
+        else if(Array.isArray(v)) v.forEach(walk); else if(v&&typeof v==="object") Object.values(v).forEach(walk); };
+      walk(j); if(parts.length) text = parts.join("\n\n");
+    }catch(_){}
+    runPipeline(text, hostport);
+  }catch(err){
+    hideProgress();
+    setError("Couldn’t fetch from "+hostport+" ("+err.message+"). The meta node may be unreachable, or the browser blocked it via CORS (cross-origin). If so, open the dump in the meta dashboard and paste it here.");
+  }
+}
+$("metaload").addEventListener("click", ()=>loadFromMeta($("metahost").value));
+$("metahost").addEventListener("keydown", e=>{ if(e.key==="Enter") loadFromMeta($("metahost").value); });
 
 // click / keyboard
 dropEl.addEventListener("click", ()=>fileEl.click());
@@ -738,9 +809,11 @@ document.addEventListener("paste", e=>{
 // report controls
 $("body").addEventListener("click", e=>{
   if(!e.target.closest) return;
-  if(e.target.id==="glayoutreset"){ LAYOUT="severity"; CUSTOM_POS={}; draw(); return; }
+  if(e.target.id==="gfilterclear"){ GRAPH_FILTER=null; draw(); return; }
   const more=e.target.closest(".more");
-  if(more){ const sec=more.dataset.sec, cfg=SECTION_CFG[sec]||{step:10}; SHOWN[sec]=(SHOWN[sec]||0)+cfg.step; draw(); return; }
+  if(more){ const sec=more.dataset.sec, cfg=SECTION_CFG[sec]||{step:10}; SHOWN[sec]=(SHOWN[sec]||0)+cfg.step;
+    if(sec==="graph"){ LAYOUT="planar"; CUSTOM_POS={}; GRAPH_FILTER=null; }   // node set changed -> re-layout cleanly (fixes custom overlap)
+    draw(); return; }
   const th=e.target.closest(".th-sort");
   if(th){ const sec=th.dataset.sec, col=+th.dataset.col, st=tstate(sec);
     if(st.sort===col){ st.dir=-st.dir; } else { st.sort=col; st.dir=-1; }
@@ -767,6 +840,15 @@ $("dljson").addEventListener("click", ()=>{
 
 // focus the loader on first load so paste works immediately
 dropEl.focus();
+
+// ?demo -> auto-load the bundled demo dump and open the report on page load
+if(new URLSearchParams(location.search).has("demo")){
+  showProgress("await_tree.demo.dump"); setProg(0.1,"Loading demo…");
+  fetch("https://raw.githubusercontent.com/Olian04/risingwave-await-tree-analyser/main/assets/await_tree.demo.dump")
+    .then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.text(); })
+    .then(t=>runPipeline(t, "await_tree.demo.dump"))
+    .catch(e=>{ hideProgress(); setError("Could not load demo dump: "+e.message); });
+}
 </script>
 </body>
 </html>
