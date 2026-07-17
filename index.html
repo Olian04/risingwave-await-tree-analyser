@@ -516,6 +516,13 @@
         flex-direction: column;
         gap: 16px;
       }
+      /* wraps the three ways to load a dump (meta bar, drop zone, recent files); hidden as one unit while parsing */
+      #loaderui {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        width: 100%;
+      }
       #metabar {
         border: 1px solid var(--bd);
         border-radius: 12px;
@@ -631,40 +638,42 @@
   <body>
     <div id="loader">
       <div class="loadercol">
-        <div id="metabar">
-          <label for="metahost">RisingWave meta node</label>
-          <div class="metarow">
-            <input id="metahost" value="localhost:5691" spellcheck="false" autocapitalize="off" autocomplete="off" />
-            <button id="metaload">Fetch await-tree</button>
+        <div id="loaderui">
+          <div id="metabar">
+            <label for="metahost">RisingWave meta node</label>
+            <div class="metarow">
+              <input id="metahost" value="localhost:5691" spellcheck="false" autocapitalize="off" autocomplete="off" />
+              <button id="metaload">Fetch await-tree</button>
+            </div>
+            <div class="metahint">
+              GET <code>/api/monitor/await_tree/</code> from the meta node (same call the RW dashboard makes). Needs
+              network access to the meta node; a browser may block it via CORS — paste the dump if so.
+            </div>
+            <div class="metaerr" id="metaerr"></div>
           </div>
-          <div class="metahint">
-            GET <code>/api/monitor/await_tree/</code> from the meta node (same call the RW dashboard makes). Needs
-            network access to the meta node; a browser may block it via CORS — paste the dump if so.
+          <div class="drop" id="drop" tabindex="0" role="button" aria-label="Load an await-tree dump">
+            <div class="icon">⬇</div>
+            <div class="big">Drop a RisingWave await-tree dump here</div>
+            <div class="hint">
+              or <strong>paste</strong> it with <kbd>⌘/Ctrl</kbd>+<kbd>V</kbd> (a file or the raw text), or
+              <strong>click</strong> to choose a file.<br />
+              Everything runs locally in your browser — nothing is uploaded.
+            </div>
+            <div class="err" id="err"></div>
           </div>
-          <div class="metaerr" id="metaerr"></div>
+          <input type="file" id="file" hidden />
+          <div id="recent" hidden>
+            <div class="recenthdr">
+              <span>Recently loaded</span>
+              <button id="recentclear" type="button">clear</button>
+            </div>
+            <div id="recentlist"></div>
+          </div>
         </div>
-        <div class="drop" id="drop" tabindex="0" role="button" aria-label="Load an await-tree dump">
-          <div class="icon">⬇</div>
-          <div class="big">Drop a RisingWave await-tree dump here</div>
-          <div class="hint">
-            or <strong>paste</strong> it with <kbd>⌘/Ctrl</kbd>+<kbd>V</kbd> (a file or the raw text), or
-            <strong>click</strong> to choose a file.<br />
-            Everything runs locally in your browser — nothing is uploaded.
-          </div>
-          <div class="err" id="err"></div>
-        </div>
-        <input type="file" id="file" hidden />
         <div id="prog" hidden>
           <div class="pname" id="pname"></div>
           <div class="plabel" id="plabel">Reading…</div>
           <div class="pbar"><span id="pfill"></span></div>
-        </div>
-        <div id="recent" hidden>
-          <div class="recenthdr">
-            <span>Recently loaded</span>
-            <button id="recentclear" type="button">clear</button>
-          </div>
-          <div id="recentlist"></div>
         </div>
       </div>
     </div>
@@ -763,24 +772,27 @@
         for (let i = 0; i < N; i++) {
           const line = treeLines[i];
           if (line && line.trim()) {
-            if (line.startsWith("[")) {
-              // section header: [Actor N], [Global Barrier Worker], [RPC ...] ...
-              cur = null; // stop attaching lines to the previous actor
-            } else {
-              const h = line.match(ACTOR_HEADER);
-              if (h) {
-                const d = line.match(DURATION_RE);
-                cur = { id: +h[1], name: h[2], uptime: d ? parseDuration(d[1], d[2]) : 0, nodes: [] };
-                actors.push(cur);
-              } else if (cur) {
-                // a node line inside the current actor's tree
-                const d = line.match(DURATION_RE);
-                cur.nodes.push({
-                  depth: leadingWs(line),
-                  label: line.trim(),
-                  seconds: d ? parseDuration(d[1], d[2]) : null,
-                });
-              }
+            // A real actor tree is: an "Actor N: `name`" header at column 0, then its spans INDENTED
+            // beneath it. So any non-indented line is a boundary: either a new actor header, or a
+            // trailing/background section — "[Global Barrier Worker]", bare "Global Barrier Worker [..s]",
+            // "[RPC ...]", etc. Treating every depth-0 non-header line as a boundary (cur = null) keeps
+            // those background tasks out of the last actor, regardless of whether they're bracketed.
+            const indent = leadingWs(line);
+            const h = indent === 0 ? line.match(ACTOR_HEADER) : null;
+            if (h) {
+              const d = line.match(DURATION_RE);
+              cur = { id: +h[1], name: h[2], uptime: d ? parseDuration(d[1], d[2]) : 0, nodes: [] };
+              actors.push(cur);
+            } else if (indent === 0) {
+              cur = null; // top-level line that isn't an actor header -> not part of any actor's tree
+            } else if (cur) {
+              // an indented span inside the current actor's tree
+              const d = line.match(DURATION_RE);
+              cur.nodes.push({
+                depth: indent,
+                label: line.trim(),
+                seconds: d ? parseDuration(d[1], d[2]) : null,
+              });
             }
           }
           if (onProg && (i & 65535) === 0) {
@@ -1009,7 +1021,7 @@
         o.stuck_count = data.stuck_count;
         o.wait_stats = {};
         for (const k in data.wait_stats) o.wait_stats[k] = r(data.wait_stats[k]);
-        o.distribution = data.distribution.map(([b, c]) => ({ bucket: b, actors: c }));
+        o.distribution = data.distribution.map(([b, c]) => ({ bucket: b.replace(/–/g, "-"), actors: c }));
         o.root_split = data.root_split.map(([k, v]) => ({ await: k, actors: v }));
         o.pipelines = data.pipelines.map(([mx, md, c, n]) => ({ pipeline: n, max: r(mx), median: r(md), actors: c }));
         o.await_points = data.await_points.map(([k, v]) => ({ await: k, actors: v }));
@@ -1617,18 +1629,15 @@
       function showProgress(name) {
         setError("");
         setMetaError("");
-        $("metabar").style.display = "none"; // hide the whole loader UI while parsing
-        $("recent").hidden = true;
-        dropEl.style.display = "none";
+        $("loaderui").style.display = "none"; // hide all load controls (meta bar + drop + recent) as one unit
         progEl.hidden = false;
         pname.textContent = name;
         setProg(0, "Reading…");
       }
       function hideProgress() {
         progEl.hidden = true;
-        dropEl.style.display = "";
-        $("metabar").style.display = "";
-        renderRecent(); // restore the recent-files list (async, fire-and-forget)
+        $("loaderui").style.display = "";
+        renderRecent(); // refresh the recent-files list (async, fire-and-forget)
       }
       function setProg(frac, label) {
         const p = Math.max(0, Math.min(1, frac));
@@ -1848,7 +1857,36 @@
             y2 = by + GNODE_H / 2;
           ed.setAttribute("d", gedgeD(x1, y1, x2, y2));
         };
-        let drag = null;
+        // focus a node's connected subtree (component) via BFS, then re-layout
+        const focusSubtree = (node) => {
+          const adj = {};
+          const add = (a, b) => {
+            (adj[a] = adj[a] || []).push(b);
+          };
+          edges.forEach((ed) => {
+            add(ed.dataset.from, ed.dataset.to);
+            add(ed.dataset.to, ed.dataset.from);
+          });
+          const seen = new Set([node]),
+            q = [node];
+          while (q.length) {
+            const c = q.shift();
+            for (const nb of adj[c] || [])
+              if (!seen.has(nb)) {
+                seen.add(nb);
+                q.push(nb);
+              }
+          }
+          GRAPH_FILTER = seen;
+          LAYOUT = "planar";
+          CUSTOM_POS = {};
+          draw();
+        };
+        // We can't rely on the native "dblclick" event: pointerdown calls preventDefault + setPointerCapture
+        // for dragging, which suppresses the browser's synthesized click/dblclick. So detect a double-click
+        // manually — two taps on the same node, neither of which moved.
+        let drag = null,
+          lastTap = { node: null, t: 0 };
         svg.addEventListener("pointerdown", (e) => {
           const g = e.target.closest && e.target.closest(".gnode");
           if (!g) return;
@@ -1882,45 +1920,29 @@
           const nm = drag.g.dataset.node;
           for (const ed of edges) if (ed.dataset.from === nm || ed.dataset.to === nm) updEdge(ed);
         });
-        const end = () => {
+        const finish = (isUp) => {
           if (!drag) return;
           try {
             svg.releasePointerCapture(drag.id);
           } catch (_) {}
-          const moved = drag.moved;
+          const moved = drag.moved,
+            node = drag.g.dataset.node;
           drag = null;
-          if (moved) draw();
-        };
-        svg.addEventListener("pointerup", end);
-        svg.addEventListener("pointercancel", end);
-        // double-click a node -> focus its connected subtree (component), then re-layout
-        svg.addEventListener("dblclick", (e) => {
-          const g = e.target.closest && e.target.closest(".gnode");
-          if (!g) return;
-          e.preventDefault();
-          const adj = {};
-          const add = (a, b) => {
-            (adj[a] = adj[a] || []).push(b);
-          };
-          edges.forEach((ed) => {
-            add(ed.dataset.from, ed.dataset.to);
-            add(ed.dataset.to, ed.dataset.from);
-          });
-          const seen = new Set([g.dataset.node]),
-            q = [g.dataset.node];
-          while (q.length) {
-            const c = q.shift();
-            for (const nb of adj[c] || [])
-              if (!seen.has(nb)) {
-                seen.add(nb);
-                q.push(nb);
-              }
+          if (moved) {
+            draw();
+            return;
           }
-          GRAPH_FILTER = seen;
-          LAYOUT = "planar";
-          CUSTOM_POS = {};
-          draw();
-        });
+          if (!isUp) return; // cancelled, not a tap
+          const now = Date.now(); // no movement => a tap; two taps on the same node = double-click
+          if (lastTap.node === node && now - lastTap.t < 350) {
+            lastTap = { node: null, t: 0 };
+            focusSubtree(node);
+          } else {
+            lastTap = { node, t: now };
+          }
+        };
+        svg.addEventListener("pointerup", () => finish(true));
+        svg.addEventListener("pointercancel", () => finish(false));
       }
       function recompute() {
         if (!STATE) return;
