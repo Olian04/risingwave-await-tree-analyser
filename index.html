@@ -116,6 +116,7 @@ input.tfilter:focus{outline:none;border-color:var(--accent);}
 #metabar input:focus{outline:none;border-color:var(--accent);}
 #metabar button{white-space:nowrap;padding:8px 14px;}
 #metabar .metahint{color:var(--mut);font-size:12px;line-height:1.6;margin-top:8px;}
+#metabar .metaerr{display:none;color:var(--bad,#ff6b6b);font-size:12.5px;line-height:1.55;margin-top:10px;}
 #metabar code{background:var(--panel2);border:1px solid var(--bd);border-radius:4px;padding:0 4px;}
 </style>
 </head>
@@ -129,7 +130,8 @@ input.tfilter:focus{outline:none;border-color:var(--accent);}
       <input id="metahost" value="localhost:5691" spellcheck="false" autocapitalize="off" autocomplete="off">
       <button id="metaload">Fetch await-tree</button>
     </div>
-    <div class="metahint">GET <code>/api/monitor/await_tree</code> from the meta node (same call the RW dashboard makes). Needs network access to the meta node; a browser may block it via CORS — paste the dump if so.</div>
+    <div class="metahint">GET <code>/api/monitor/await_tree/</code> from the meta node (same call the RW dashboard makes). Needs network access to the meta node; a browser may block it via CORS — paste the dump if so.</div>
+    <div class="metaerr" id="metaerr"></div>
   </div>
   <div class="drop" id="drop" tabindex="0" role="button" aria-label="Load an await-tree dump">
     <div class="icon">⬇</div>
@@ -759,10 +761,12 @@ function readFile(file){
 }
 
 // fetch an await-tree dump straight from a RisingWave meta node (same call the dashboard makes)
+function setMetaError(msg){ $("metaerr").textContent = msg||""; $("metaerr").style.display = msg?"block":"none"; }
 async function loadFromMeta(hostport){
-  hostport=(hostport||"").trim(); if(!hostport){ setError("Enter the meta node host:port."); return; }
+  hostport=(hostport||"").trim(); if(!hostport){ setMetaError("Enter the meta node host:port."); return; }
+  setMetaError("");
   const base = /^https?:\/\//.test(hostport) ? hostport : ("http://"+hostport);
-  const url = base.replace(/\/+$/,"") + "/api/monitor/await_tree";
+  const url = base.replace(/\/+$/,"") + "/api/monitor/await_tree/";   // trailing slash required by the meta API
   showProgress(hostport); setProg(0.1,"Fetching await-tree…");
   try{
     const res = await fetch(url, {headers:{Accept:"application/json, text/plain, */*"}});
@@ -778,7 +782,7 @@ async function loadFromMeta(hostport){
     runPipeline(text, hostport);
   }catch(err){
     hideProgress();
-    setError("Couldn’t fetch from "+hostport+" ("+err.message+"). The meta node may be unreachable, or the browser blocked it via CORS (cross-origin). If so, open the dump in the meta dashboard and paste it here.");
+    setMetaError("Couldn’t fetch from "+hostport+" ("+err.message+"). The meta node may be unreachable, or the browser blocked it via CORS (cross-origin). If so, open the dump in the meta dashboard and paste it here.");
   }
 }
 $("metaload").addEventListener("click", ()=>loadFromMeta($("metahost").value));
