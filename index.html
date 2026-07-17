@@ -86,6 +86,9 @@ details.info .ibody code{background:var(--panel);border:1px solid var(--bd);bord
 .graphwrap{overflow-x:auto;border:1px solid var(--bd);border-radius:10px;background:var(--panel);padding:14px;margin:6px 0 4px;}
 #body svg text.nt{fill:var(--tx);}
 #body svg text.ns{fill:var(--mut);}
+#body svg text{user-select:none;}
+#body svg .gnode{cursor:grab;touch-action:none;}
+#body svg .gnode:active{cursor:grabbing;}
 .glegend{display:flex;gap:14px;flex-wrap:wrap;color:var(--mut);font-size:12px;margin:8px 2px 0;}
 .glegend i{font-style:normal;display:inline-flex;align-items:center;gap:5px;}
 .glegend .sw{width:11px;height:11px;border-radius:3px;display:inline-block;}
@@ -411,6 +414,7 @@ function edgeColor(t){
   return `rgb(${c[0]},${c[1]},${c[2]})`;
 }
 
+const GNODE_W=182, GNODE_H=44;   // shared by graphSvg and the drag handler
 function graphSvg(chains, limit){
   const use=chains.slice(0, Math.min(limit, chains.length));
   if(!use.length) return "<p class=note>No chains to graph.</p>";
@@ -432,7 +436,7 @@ function graphSvg(chains, limit){
   for(const n of nodes.keys()) L(n,new Set());
   const cols=new Map(); let maxLayer=0;
   for(const [n,l] of layer){ pushMap(cols,l,n); if(l>maxLayer) maxLayer=l; }
-  const NW=182,NH=44,COLW=232,ROWH=66,PADX=16,PADY=16;
+  const NW=GNODE_W,NH=GNODE_H,COLW=232,ROWH=66,PADX=16,PADY=16;
   const pos=new Map(); let maxRows=1;
   for(let l=0;l<=maxLayer;l++){ const arr=(cols.get(l)||[]).sort((a,b)=>nodes.get(b).wait-nodes.get(a).wait);
     maxRows=Math.max(maxRows,arr.length); arr.forEach((n,i)=>pos.set(n,{x:PADX+l*COLW, y:PADY+i*ROWH})); }
@@ -443,12 +447,13 @@ function graphSvg(chains, limit){
   for(const [k,w] of edges){ const [f,t]=k.split(""); const a=pos.get(f),b=pos.get(t); if(!a||!b) continue;
     const x1=a.x+NW, y1=a.y+NH/2, x2=b.x, y2=b.y+NH/2, mx=(x1+x2)/2;
     const sw=(1.2+5*(w/maxEW)).toFixed(1);
-    s+=`<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill=none stroke="${edgeColor(w/maxEW)}" stroke-opacity="0.85" stroke-width=${sw}><title>${esc(f)} → ${esc(t)}: ${w.toFixed(2)}s</title></path>`; }
+    s+=`<path class=gedge data-from="${esc(f)}" data-to="${esc(t)}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill=none stroke="${edgeColor(w/maxEW)}" stroke-opacity="0.85" stroke-width=${sw}><title>${esc(f)} → ${esc(t)}: ${w.toFixed(2)}s</title></path>`; }
   for(const [n,nd] of nodes){ const p=pos.get(n), hex=catHex(nd.cat); const disp=n.length>24?n.slice(0,23)+"…":n;
-    s+=`<g><title>${esc(n)} — ${esc(nd.cat)} — ${nd.wait.toFixed(2)}s</title>`
-     + `<rect x=${p.x} y=${p.y} width=${NW} height=${NH} rx=8 fill="${hex}22" stroke="${hex}" stroke-opacity="0.75"/>`
-     + `<text class=nt x=${p.x+11} y=${p.y+18} font-size=12>${esc(disp)}</text>`
-     + `<text class=ns x=${p.x+11} y=${p.y+34} font-size=11>${esc(nd.cat)} · ${nd.wait.toFixed(2)}s</text></g>`; }
+    s+=`<g class=gnode data-node="${esc(n)}" data-x="${p.x}" data-y="${p.y}" transform="translate(${p.x},${p.y})">`
+     + `<title>${esc(n)} — ${esc(nd.cat)} — ${nd.wait.toFixed(2)}s (drag to move)</title>`
+     + `<rect x=0 y=0 width=${NW} height=${NH} rx=8 fill="${hex}22" stroke="${hex}" stroke-opacity="0.75"/>`
+     + `<text class=nt x=11 y=18 font-size=12>${esc(disp)}</text>`
+     + `<text class=ns x=11 y=34 font-size=11>${esc(nd.cat)} · ${nd.wait.toFixed(2)}s</text></g>`; }
   s+="</svg>";
   return s;
 }
@@ -594,6 +599,38 @@ function draw(){
   body.innerHTML = bannerHtml() + renderReport(STATE._data);
   const ds=body.querySelectorAll("details.info"); open.forEach((o,i)=>{ if(ds[i]) ds[i].open=o; });
   if(af){ const inp=body.querySelector('.tfilter[data-sec="'+af.sec+'"]'); if(inp){ inp.focus(); try{ inp.setSelectionRange(af.s,af.e); }catch(_){} } }
+  wireGraphDrag();
+}
+
+// click-and-drag to reposition graph nodes; connected edges follow.
+function wireGraphDrag(){
+  const svg=$("body").querySelector(".graphwrap svg"); if(!svg) return;
+  const nodeEls={}; svg.querySelectorAll(".gnode").forEach(g=>nodeEls[g.dataset.node]=g);
+  const edges=[...svg.querySelectorAll(".gedge")];
+  const toSvg=e=>{ const m=svg.getScreenCTM(); const p=svg.createSVGPoint(); p.x=e.clientX; p.y=e.clientY;
+    return m ? p.matrixTransform(m.inverse()) : {x:e.clientX,y:e.clientY}; };
+  const updEdge=ed=>{ const a=nodeEls[ed.dataset.from], b=nodeEls[ed.dataset.to]; if(!a||!b) return;
+    const ax=+a.dataset.x, ay=+a.dataset.y, bx=+b.dataset.x, by=+b.dataset.y;
+    const x1=ax+GNODE_W, y1=ay+GNODE_H/2, x2=bx, y2=by+GNODE_H/2, mx=(x1+x2)/2;
+    ed.setAttribute("d",`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`); };
+  let drag=null;
+  svg.addEventListener("pointerdown", e=>{
+    const g=e.target.closest && e.target.closest(".gnode"); if(!g) return;
+    e.preventDefault(); const s=toSvg(e);
+    drag={g, sx:s.x, sy:s.y, ox:+g.dataset.x, oy:+g.dataset.y, id:e.pointerId};
+    try{ svg.setPointerCapture(e.pointerId); }catch(_){}
+    g.parentNode.appendChild(g);   // bring dragged node to front
+  });
+  svg.addEventListener("pointermove", e=>{
+    if(!drag) return; const s=toSvg(e);
+    const nx=drag.ox+(s.x-drag.sx), ny=drag.oy+(s.y-drag.sy);
+    drag.g.dataset.x=nx; drag.g.dataset.y=ny; drag.g.setAttribute("transform",`translate(${nx},${ny})`);
+    const nm=drag.g.dataset.node;
+    for(const ed of edges) if(ed.dataset.from===nm || ed.dataset.to===nm) updEdge(ed);
+  });
+  const end=()=>{ if(!drag) return; try{ svg.releasePointerCapture(drag.id); }catch(_){} drag=null; };
+  svg.addEventListener("pointerup", end);
+  svg.addEventListener("pointercancel", end);
 }
 function recompute(){
   if (!STATE) return;
