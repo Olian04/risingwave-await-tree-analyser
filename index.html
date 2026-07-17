@@ -697,7 +697,10 @@
       // ===================================================================== //
       // Parsing (ported 1:1 from await_tree_report.py)                         //
       // ===================================================================== //
-      const DURATION_RE = /\[([0-9.]+)(ns|us|µs|ms|s|m)\]\s*$/;
+      // await-tree renders "[<dur>]", or "[!!! <dur>]" when a NON-long-running span has awaited >= 10s
+      // (see await-tree src/context.rs Display impl). The optional "!!!" is our true-wait-vs-idle signal.
+      const DURATION_RE = /\[(?:(!!!) )?([0-9.]+)(ns|us|µs|ms|s|m)\]\s*$/;
+      const LONG_RUNNING_S = 10; // the library's hardcoded long-running threshold
       const ACTOR_HEADER = /^Actor (\d+): `([^`]*)`/;
       const ACTOR_PROBE = /Actor \d+: `/;
       const JVM_THREAD = /^"([^"]+)" .*Id=(\d+)\s+([A-Z_]+)/;
@@ -726,6 +729,7 @@
         label = label.replace(/\b[0-9A-F]{8,}\b/g, "");
         label = label.replace(/\(actor \d+\)/g, "(actor N)");
         label = label.replace(/\bactor \d+\b/g, "actor N");
+        label = label.replace(/\((sink_id|source_id|table_id|fragment_id) \d+\)/g, "($1 N)"); // collapse RW object ids
         label = label.replace(/\d{6,}/g, "N");
         return label.replace(/\s+/g, " ").trim();
       }
@@ -781,17 +785,23 @@
             const h = indent === 0 ? line.match(ACTOR_HEADER) : null;
             if (h) {
               const d = line.match(DURATION_RE);
-              cur = { id: +h[1], name: h[2], uptime: d ? parseDuration(d[1], d[2]) : 0, nodes: [] };
+              // the actor root span is always long-running; its duration is uptime, never a wait
+              cur = { id: +h[1], name: h[2], uptime: d ? parseDuration(d[2], d[3]) : 0, nodes: [] };
               actors.push(cur);
             } else if (indent === 0) {
               cur = null; // top-level line that isn't an actor header -> not part of any actor's tree
             } else if (cur) {
               // an indented span inside the current actor's tree
               const d = line.match(DURATION_RE);
+              const sec = d ? parseDuration(d[2], d[3]) : null;
+              const bang = !!(d && d[1]); // "!!!" => a genuinely stuck (non-long-running) true wait
+              // idle = provably long-running: >= 10s WITHOUT the "!!!" marker (the only way that happens).
+              // "!!!" spans and sub-10s spans are treated as true waits.
               cur.nodes.push({
                 depth: indent,
                 label: line.trim(),
-                seconds: d ? parseDuration(d[1], d[2]) : null,
+                seconds: sec,
+                idle: sec != null && !bang && sec >= LONG_RUNNING_S,
               });
             }
           }
@@ -805,28 +815,42 @@
 
       function computeDerived(a) {
         const n = a.nodes;
-        // epoch wait: shallowest "Epoch ..." span (indent-unit agnostic)
+        // TRUE-WAIT epoch wait: shallowest "Epoch ..." span, ignoring idle (long-running) spans.
         let ew = 0;
         if (n.length) {
           let minDepth = Infinity;
           for (const x of n) if (x.depth < minDepth) minDepth = x.depth;
-          const top = n.filter((x) => x.depth === minDepth && x.seconds != null);
+          const top = n.filter((x) => x.depth === minDepth && x.seconds != null && !x.idle);
           const epochs = top.filter((x) => x.label.startsWith("Epoch")).map((x) => x.seconds);
           ew = epochs.length ? arrMax(epochs) : arrMax(top.map((x) => x.seconds));
         }
-        a.epochWait = ew;
+        a.epochWait = ew; // true wait — used for stats, stuck counts, ranking, chains
+        // idle wait + label — longest long-running span anywhere in this actor (a source idling for
+        // data, a sink's consume_log, etc.), leaf or not. Tracked separately; never fed into stats,
+        // ranking, or chains.
+        let idleSec = -Infinity,
+          idleLbl = null;
+        for (const x of n) {
+          if (!x.idle || x.seconds == null) continue;
+          if (x.seconds > idleSec) {
+            idleSec = x.seconds;
+            idleLbl = normaliseLabel(x.label);
+          }
+        }
+        a.idleWait = idleSec > -Infinity ? idleSec : 0;
+        a.idlePrimary = idleLbl !== null ? [idleLbl, idleSec] : null;
         // leaves
         const leaves = [];
         for (let i = 0; i < n.length; i++) {
           const isLeaf = !(i + 1 < n.length && n[i + 1].depth > n[i].depth);
           if (isLeaf) leaves.push(n[i]);
         }
-        // primary await (drop sub-waits longer than the step = parse noise).
-        // Tie-break by label lexicographically to match Python's max((seconds,label)).
+        // primary TRUE await: longest non-idle leaf (dropping sub-waits longer than the step = parse noise).
+        // Tie-break by label lexicographically to match the Python reference.
         let bestSec = -Infinity,
           bestLbl = null;
         for (const nd of leaves) {
-          if (nd.seconds == null) continue;
+          if (nd.seconds == null || nd.idle) continue;
           if (ew > 0 && nd.seconds > ew + 1e-6) continue;
           const lbl = normaliseLabel(nd.label);
           if (nd.seconds > bestSec || (nd.seconds === bestSec && (bestLbl === null || lbl > bestLbl))) {
@@ -835,11 +859,21 @@
           }
         }
         a.primary = bestLbl !== null ? [bestLbl, bestSec] : null;
-        a.category = a.primary ? normaliseCategory(a.primary[0]) : "?";
-        // upstream edges
+        // Category prefers the true await; an actor with only idle spans is idle-only (labelled as such).
+        if (a.primary) {
+          a.category = normaliseCategory(a.primary[0]);
+          a.idleOnly = false;
+        } else if (a.idlePrimary) {
+          a.category = normaliseCategory(a.idlePrimary[0]);
+          a.idleOnly = true;
+        } else {
+          a.category = "?";
+          a.idleOnly = false;
+        }
+        // upstream edges — only NON-idle inputs; an idle input is not backpressure and must not extend a chain
         const up = [];
         for (const nd of leaves) {
-          if (nd.seconds == null) continue;
+          if (nd.seconds == null || nd.idle) continue;
           const m = nd.label.match(INPUT_EDGE);
           if (m) up.push({ id: +m[1], sec: nd.seconds });
         }
@@ -974,12 +1008,29 @@
           data.top_actors = actors
             .slice()
             .sort((a, b) => b.epochWait - a.epochWait)
-            .map((a) => [a.epochWait, a.id, a.name, a.primary ? a.primary[0] : "?"]);
+            .map((a) => [
+              a.epochWait,
+              a.id,
+              a.name,
+              a.primary ? a.primary[0] : a.idlePrimary ? a.idlePrimary[0] + " (idle)" : "?",
+            ]);
+
+          // Idle summary — long-running spans surfaced explicitly, so they're visible but clearly labelled.
+          // Breakdown is over every actor that HAS an idle span (by its longest idle await), not just
+          // purely-idle actors — most actors pair a ~1s true Epoch wait with a long-running idle span.
+          const withIdle = actors.filter((a) => a.idleWait > 0);
+          data.idle = {
+            idle_only: actors.reduce((c, a) => c + (a.idleOnly ? 1 : 0), 0),
+            with_idle: withIdle.length,
+            max_idle: arrMax(actors.map((a) => a.idleWait)),
+            split: mostCommon(counter(withIdle.filter((a) => a.idlePrimary).map((a) => a.idlePrimary[0])), 0),
+          };
 
           const byId = new Map(actors.map((a) => [a.id, a]));
           const roots = new Map();
           for (const a of actors) {
-            const r = byId.get(walkToRoot(a.id, byId, maxHops).at(-1)).category;
+            const term = byId.get(walkToRoot(a.id, byId, maxHops).at(-1));
+            const r = term.idleOnly ? term.category + " (idle)" : term.category; // idle terminals kept distinct
             roots.set(r, (roots.get(r) || 0) + 1);
           }
           data.root_split = mostCommon(roots, 0);
@@ -989,6 +1040,7 @@
             const g = byPipe.get(name);
             let seed = g[0];
             for (const x of g) if (x.epochWait > seed.epochWait) seed = x;
+            if (seed.epochWait <= 0) continue; // idle-only pipeline: no true wait -> never charted as a chain
             const path = walkToRoot(seed.id, byId, maxHops);
             const hops = [];
             let last = null;
@@ -996,7 +1048,7 @@
               const a = byId.get(id);
               if (a.name === last) continue;
               last = a.name;
-              hops.push([a.name, a.epochWait, a.category]);
+              hops.push([a.name, a.epochWait, a.idleOnly ? a.category + " (idle)" : a.category]);
             }
             data.chains.push({ pipeline: name, max_wait: seed.epochWait, actor_count: g.length, hops });
           }
@@ -1022,6 +1074,12 @@
         o.wait_stats = {};
         for (const k in data.wait_stats) o.wait_stats[k] = r(data.wait_stats[k]);
         o.distribution = data.distribution.map(([b, c]) => ({ bucket: b.replace(/–/g, "-"), actors: c }));
+        o.idle = {
+          idle_only_actors: data.idle.idle_only,
+          actors_with_idle_span: data.idle.with_idle,
+          max_idle_s: r(data.idle.max_idle),
+          split: data.idle.split.map(([k, v]) => ({ await: k, actors: v })),
+        };
         o.root_split = data.root_split.map(([k, v]) => ({ await: k, actors: v }));
         o.pipelines = data.pipelines.map(([mx, md, c, n]) => ({ pipeline: n, max: r(mx), median: r(md), actors: c }));
         o.await_points = data.await_points.map(([k, v]) => ({ await: k, actors: v }));
@@ -1401,10 +1459,11 @@
         const out = [];
         const cards = [
           ["Actors", nf(total)],
-          ["Epoch-wait median", s.median.toFixed(2) + "s"],
+          ["True-wait median", s.median.toFixed(2) + "s"],
           ["p99", s.p99.toFixed(2) + "s"],
           ["max", s.max.toFixed(2) + "s"],
-          ["Actors ≥ 5s", nf(data.stuck_count)],
+          ["Stuck ≥ 5s", nf(data.stuck_count)],
+          ["Idle-only actors", nf(data.idle.idle_only)],
         ];
         out.push(
           "<div class=cards>" +
@@ -1418,13 +1477,13 @@
         );
         out.push(
           info(
-            "An await-tree span’s duration is just how long that future has been awaiting — it is <b>not</b> by itself “backpressure”. Following each actor upstream (most-stuck branch) to a span it can’t blame on another actor gives its root: " +
-              "<b>Source</b> = awaiting ingestion — the ambiguous one: it can be genuine backpressure <em>or</em> simply an idle source with no new upstream data (the tree alone can’t distinguish — corroborate with source throughput &amp; barrier latency); " +
+            "<b>True wait vs idle.</b> await-tree marks a span “<code>!!!</code>” when a <em>non</em>-long-running future has awaited ≥ 10s (a genuine stall), and never marks long-running spans (idle sources, sink <code>consume_log</code>, barrier scheduling, the actor root) no matter how long they sit. This report uses that signal: a span ≥ 10s <em>without</em> <code>!!!</code> is provably long-running, so it’s counted as <b>idle</b>, kept out of every wait statistic and chain, and shown separately below. Everything here is <b>true wait</b>. " +
+              "Tracing each actor upstream (most-stuck branch) to a span it can’t blame on another actor gives its root: " +
+              "<b>Source</b> = awaiting ingestion (genuine backpressure when it’s a true wait; an idle source shows up as “Source (idle)” instead); " +
               "<b>wait_pending_fetch_block</b> = reading state from S3 / the block cache; " +
               "<b>receive_barrier</b> = waiting for the next checkpoint barrier (usually normal propagation); " +
               "<b>Wait For New Buffer Item</b> = a sink with nothing to send; " +
-              "<b>UpstreamSinkUnion</b> = reading a base table fed by an upstream source/sink. " +
-              "A high <b>Source</b> share means ingestion-bound — confirm data is actually flowing before calling it backpressure.",
+              "<b>UpstreamSinkUnion</b> = reading a base table fed by an upstream source/sink.",
           ),
         );
         out.push(
@@ -1432,6 +1491,23 @@
             data.root_split.map(([l, c]) => barRow(l, c, total)).join("") +
             "</tbody></table>",
         );
+
+        if (data.idle.with_idle) {
+          out.push("<h2>Idle (long-running) spans</h2>");
+          out.push(
+            "<p class=sub>Long-running futures (≥ 10s, unmarked by await-tree) — expected-long, <b>not</b> backpressure. Excluded from the waits above and from all chains; listed here only so they’re visible. Longest idle span: " +
+              data.idle.max_idle.toFixed(0) +
+              "s across " +
+              nf(data.idle.with_idle) +
+              " actors.</p>",
+          );
+          if (data.idle.split.length)
+            out.push(
+              "<table><thead><tr><th>Idle await</th><th class=num>Actors</th><th>Share</th></tr></thead><tbody>" +
+                data.idle.split.map(([l, c]) => barRow(l, c, total)).join("") +
+                "</tbody></table>",
+            );
+        }
 
         out.push("<h2>Longest await chains</h2>");
         out.push(
