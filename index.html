@@ -675,6 +675,7 @@
           <span class="fn" id="fn"></span>
           <span class="muted" id="summary"></span>
           <span class="spacer"></span>
+          <button id="dldump">Download dump</button>
           <button id="dljson">Download JSON</button>
           <button id="another">Load another</button>
         </div>
@@ -1313,6 +1314,29 @@
         const pos = new Map();
         for (let l = 0; l <= maxLayer; l++)
           order.get(l).forEach((n) => pos.set(n, { x: PADX + l * COLW, y: PADY + yy.get(n) }));
+        // Collapse full-width empty vertical bands: disconnected components can be spread far apart
+        // by the barycenter pass, leaving big gaps. Merge occupied y-intervals and pull everything
+        // below any oversized gap upward, keeping one row of breathing space.
+        {
+          const iv = [...pos.values()].map((p) => [p.y, p.y + NH]).sort((a, b) => a[0] - b[0]);
+          const merged = [];
+          for (const [s, e] of iv) {
+            const last = merged[merged.length - 1];
+            if (last && s <= last[1] + 1) last[1] = Math.max(last[1], e);
+            else merged.push([s, e]);
+          }
+          const cuts = [];
+          for (let i = 1; i < merged.length; i++) {
+            const gap = merged[i][0] - merged[i - 1][1];
+            if (gap > ROWH) cuts.push([merged[i][0], gap - ROWH]); // keep one row of gap
+          }
+          if (cuts.length)
+            for (const p of pos.values()) {
+              let shift = 0;
+              for (const [from, amt] of cuts) if (p.y >= from) shift += amt;
+              p.y -= shift;
+            }
+        }
         if (LAYOUT === "custom") {
           for (const n of nodes.keys()) {
             const c = CUSTOM_POS[n];
@@ -1748,7 +1772,7 @@
             setError("0 actors parsed — is this an await-tree dump?");
             return;
           }
-          STATE = { actors, jvm: jvmThreads, source, prefix: sp.prefix };
+          STATE = { actors, jvm: jvmThreads, source, prefix: sp.prefix, rawText: text };
           rememberFile(source, text, actors.length); // persist for the "recently loaded" list, no matter the load path
           setProg(0.9, "Building report…");
           await tick();
@@ -2078,7 +2102,6 @@
         STATE = null;
         fileEl.value = "";
         renderRecent();
-        dropEl.focus();
       });
 
       // click a recent entry -> reload it (runPipeline re-remembers it, moving it back to the top)
@@ -2094,6 +2117,17 @@
         } catch (_) {}
         renderRecent();
       });
+      $("dldump").addEventListener("click", () => {
+        if (!STATE || STATE.rawText == null) return;
+        const blob = new Blob([STATE.rawText], { type: "text/plain" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        let base = (STATE.source || "await-tree").replace(/[\/\\:*?"<>|]+/g, "_").trim();
+        if (!/\.(dump|txt|log)$/i.test(base)) base += ".dump";
+        a.download = base;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      });
       $("dljson").addEventListener("click", () => {
         if (!STATE) return;
         const blob = new Blob([JSON.stringify(toJson(STATE._data, STATE.source), null, 2)], {
@@ -2106,9 +2140,8 @@
         URL.revokeObjectURL(a.href);
       });
 
-      // focus the loader on first load so paste works immediately
+      // render any recent files; paste works globally (document-level), so nothing is auto-focused
       renderRecent();
-      dropEl.focus();
 
       // ?demo -> auto-load the bundled demo dump and open the report on page load
       if (new URLSearchParams(location.search).has("demo")) {
