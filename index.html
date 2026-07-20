@@ -312,6 +312,13 @@
         padding: 12px 14px;
         margin: 10px 0;
       }
+      .chain.clickable {
+        cursor: pointer;
+      }
+      .chain.clickable:hover {
+        border-color: var(--accent);
+        background: var(--panel2);
+      }
       .chain .title {
         font-weight: 600;
         margin-bottom: 8px;
@@ -633,6 +640,43 @@
         font-size: 12px;
         white-space: nowrap;
       }
+      .rootinfo {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 14px;
+        height: 14px;
+        border: 1px solid var(--bd);
+        border-radius: 50%;
+        font-size: 9px;
+        font-style: italic;
+        font-family: Georgia, "Times New Roman", serif;
+        color: var(--mut);
+        cursor: help;
+        vertical-align: middle;
+        user-select: none;
+      }
+      .rootinfo:hover,
+      .rootinfo:focus-visible {
+        color: var(--tx);
+        border-color: var(--accent);
+        outline: none;
+      }
+      #rootpop {
+        position: fixed;
+        inset: auto; /* override the UA-centered default so we can place it by the icon */
+        margin: 0;
+        max-width: 340px;
+        white-space: pre-line; /* honour the line breaks in node descriptions */
+        background: var(--panel2);
+        color: var(--tx);
+        border: 1px solid var(--bd);
+        border-radius: 8px;
+        padding: 10px 12px;
+        font-size: 12.5px;
+        line-height: 1.55;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+      }
     </style>
   </head>
   <body>
@@ -691,6 +735,7 @@
       </div>
       <div class="wrap" id="body"></div>
     </div>
+    <div id="rootpop" popover="manual"></div>
 
     <script>
       "use strict";
@@ -718,6 +763,39 @@
         DynamicFilter: "gray",
         Now: "gray",
       };
+      // Reader-facing description per root-await category, shown in the (i) popover on each root row.
+      const CAT_DESC = {
+        Source: "Waiting on ingestion — new data arriving from an upstream source (Kafka, CDC, etc.).",
+        wait_pending_fetch_block: "Reading state from storage — the object store (S3) or the local cache.",
+        receive_barrier: "Waiting for the next checkpoint barrier to arrive. Usually normal propagation, not a stall.",
+        "Wait For New Buffer Item": "A sink with nothing to send right now — it has emitted everything available.",
+        UpstreamSinkUnion: "Reading a base table that is fed by an upstream source or sink.",
+        input: "Waiting on data from an upstream actor in the same pipeline.",
+        Merge: "Combining input from several upstream actors before the next operator.",
+        DynamicFilter: "Waiting inside a dynamic-filter operator (e.g. a value that gates a join or filter).",
+        Now: "Waiting on the current processing time — a time-based operator such as a temporal filter or window.",
+      };
+      function rootDesc(label) {
+        const idle = / \(idle\)$/.test(label);
+        const base = label.replace(/ \(idle\)$/, "");
+        const d = CAT_DESC[base] || (base ? "Waiting inside the " + base + " operator." : "Waiting.");
+        const idleNote = " Marked (idle): long-running and simply waiting for new work — expected, not backpressure.";
+        return idle ? d + idleNote : d;
+      }
+      // Await-point descriptions distinguish Remote vs Local input (same category, different transport).
+      function awaitPointDesc(label) {
+        if (/^RemoteInput\b/.test(label))
+          return "Waiting for data from an upstream actor on a different compute node — it arrives over the network (an exchange/RPC).";
+        if (/^LocalInput\b/.test(label))
+          return "Waiting for data from an upstream actor on the same compute node — an in-process channel, no network hop.";
+        return rootDesc(normaliseCategory(label));
+      }
+      // the (i) icon markup used in tables; hovering it shows `desc` in the shared popover
+      function infoIcon(desc, label) {
+        return desc
+          ? ` <span class=rootinfo tabindex=0 role=button aria-label="What “${esc(label)}” means" data-desc="${esc(desc)}">i</span>`
+          : "";
+      }
 
       const tick = () => new Promise((r) => setTimeout(r, 0)); // yield to the event loop (keeps progress bar live)
       const STUCK_S = LONG_RUNNING_S; // matches await-tree's own "!!!" threshold: a true wait >= 10s is stuck
@@ -854,13 +932,12 @@
           const isLeaf = !(i + 1 < n.length && n[i + 1].depth > n[i].depth);
           if (isLeaf) leaves.push(n[i]);
         }
-        // primary TRUE await: longest non-idle leaf (dropping sub-waits longer than the step = parse noise).
-        // Tie-break by label lexicographically to match the Python reference.
+        // primary TRUE await: the longest non-idle leaf (what the actor is actually blocked on).
+        // Tie-break by label lexicographically for stability.
         let bestSec = -Infinity,
           bestLbl = null;
         for (const nd of leaves) {
           if (nd.seconds == null || nd.idle) continue;
-          if (ew > 0 && nd.seconds > ew + 1e-6) continue;
           const lbl = normaliseLabel(nd.label);
           if (nd.seconds > bestSec || (nd.seconds === bestSec && (bestLbl === null || lbl > bestLbl))) {
             bestSec = nd.seconds;
@@ -1135,10 +1212,10 @@
       function nf(n) {
         return n.toLocaleString("en-US");
       }
-      function barRow(label, count, total) {
+      function barRow(label, count, total, desc) {
         const pct = total ? (count / total) * 100 : 0;
         return (
-          `<tr><td>${esc(label)}</td><td class=num>${nf(count)}</td>` +
+          `<tr><td>${esc(label)}${infoIcon(desc, label)}</td><td class=num>${nf(count)}</td>` +
           `<td style="width:55%"><div class=barcell><span style="width:${pct.toFixed(1)}%"></span>` +
           `<em>${pct.toFixed(1)}%</em></div></td></tr>`
         );
@@ -1260,6 +1337,7 @@
       let LAYOUT = "planar"; // "planar" | "custom"  (severity layout deprecated)
       let CUSTOM_POS = {}; // node name -> [x,y] in custom mode
       let GRAPH_FILTER = null; // Set of node names to restrict the graph to (subtree focus), or null
+      let GRAPH_HIGHLIGHT = null; // Set of node names to spotlight (from a clicked chain); others dimmed
 
       // median-heuristic crossing reduction for a layered DAG (fewer edge crossings ≈ planar)
       function planarOrder(cols, maxLayer, preds, succ) {
@@ -1474,18 +1552,23 @@
             y2 = b.y + NH / 2;
           const t01 = Math.min(w / EDGE_MAX_S, 1); // colour/width on an ABSOLUTE 0..10s scale, not relative to max
           const sw = (1.2 + 5 * t01).toFixed(1);
-          s += `<path class=gedge data-from="${esc(f)}" data-to="${esc(t)}" d="${gedgeD(x1, y1, x2, y2)}" fill=none stroke="${edgeColor(t01)}" stroke-opacity="0.85" stroke-width=${sw}><title>${esc(f)} → ${esc(t)}: ${w.toFixed(2)}s</title></path>`;
+          // when a chain is highlighted, dim edges that aren't between two highlighted nodes
+          const eop = GRAPH_HIGHLIGHT && !(GRAPH_HIGHLIGHT.has(f) && GRAPH_HIGHLIGHT.has(t)) ? 0.1 : 0.85;
+          s += `<path class=gedge data-from="${esc(f)}" data-to="${esc(t)}" d="${gedgeD(x1, y1, x2, y2)}" fill=none stroke="${edgeColor(t01)}" stroke-opacity="${eop}" stroke-width=${sw}><title>${esc(f)} → ${esc(t)}: ${w.toFixed(2)}s</title></path>`;
         }
         for (const [n, nd] of nodes) {
           const p = pos.get(n),
             hex = catHex(nd.cat);
           const disp = n.length > 24 ? n.slice(0, 23) + "…" : n;
+          const hlOn = GRAPH_HIGHLIGHT && GRAPH_HIGHLIGHT.has(n); // spotlighted (in the selected chain)
+          const dim = GRAPH_HIGHLIGHT && !GRAPH_HIGHLIGHT.has(n); // fade the rest
           s +=
-            `<g class=gnode data-node="${esc(n)}" data-x="${p.x}" data-y="${p.y}" transform="translate(${p.x},${p.y})">` +
-            `<title>${esc(n)} — ${esc(nd.cat)} — ${nd.wait.toFixed(2)}s (drag to move)</title>` +
-            `<rect x=0 y=0 width=${NW} height=${NH} rx=8 fill="${hex}22" stroke="${hex}" stroke-opacity="0.75"/>` +
+            `<g class=gnode data-node="${esc(n)}" data-x="${p.x}" data-y="${p.y}" transform="translate(${p.x},${p.y})"${dim ? ' opacity="0.28"' : ""}>` +
+            `<title>${esc(n)} — ${esc(nd.cat)} · ${nd.wait.toFixed(2)}s</title>` +
+            `<rect x=0 y=0 width=${NW} height=${NH} rx=8 fill="${hex}${hlOn ? "3a" : "22"}" stroke="${hex}" stroke-opacity="${hlOn ? 1 : 0.75}" stroke-width="${hlOn ? 2.5 : 1}"/>` +
             `<text class=nt x=11 y=18 font-size=12>${esc(disp)}</text>` +
-            `<text class=ns x=11 y=34 font-size=11>${esc(nd.cat)} · ${nd.wait.toFixed(2)}s</text></g>`;
+            `<text class=ns x=11 y=34 font-size=11>${esc(nd.cat)} · ${nd.wait.toFixed(2)}s</text>` +
+            `</g>`;
         }
         s += "</svg>";
         return s;
@@ -1511,9 +1594,7 @@
         );
 
         out.push("<h2>Await roots — where each actor bottoms out</h2>");
-        out.push(
-          "<p class=sub>Each actor traced upstream to what it ultimately waits on, plus any long-running <b>idle</b> waits — in one table.</p>",
-        );
+        out.push("<p class=sub>Each actor traced upstream to what it ultimately waits on.</p>");
         out.push(
           info(
             "Each actor is followed upstream to the thing it ultimately waits on — its <b>root</b>: " +
@@ -1521,14 +1602,14 @@
               "<b>wait_pending_fetch_block</b> = reading state from storage (S3 / cache); " +
               "<b>receive_barrier</b> = waiting for the next checkpoint barrier, usually normal; " +
               "<b>Wait For New Buffer Item</b> = a sink with nothing to send; " +
-              "<b>UpstreamSinkUnion</b> = reading a base table fed by an upstream source or sink. " +
-              "Rows marked “<b>(idle)</b>” are long-running operations simply waiting for new work — an idle source, or a sink that has caught up. These are expected and are <b>not</b> backpressure. " +
-              "An actor may show both a real wait and an idle wait, so the numbers can add up to more than the total actor count.",
+              "<b>UpstreamSinkUnion</b> = reading a base table fed by an upstream source or sink; " +
+              "<b>input</b> = waiting on data from an upstream actor. " +
+              "A root may be marked “<b>(idle)</b>” — a long-running operation waiting for new work, e.g. an idle source. That’s expected and is <b>not</b> backpressure.",
           ),
         );
         out.push(
           "<table><thead><tr><th>Root await</th><th class=num>Actors</th><th>Share</th></tr></thead><tbody>" +
-            data.root_split.map(([l, c]) => barRow(l, c, total)).join("") +
+            data.root_split.map(([l, c]) => barRow(l, c, total, rootDesc(l))).join("") +
             "</tbody></table>",
         );
 
@@ -1538,8 +1619,12 @@
             "A graph of the chains with the longest waits. Each <b>node</b> is a pipeline; an <b>edge</b> connects a downstream pipeline to the upstream one it awaits — downstream on the left, roots on the right. An edge’s <b>thickness and colour</b> show the wait time on a fixed scale (0s cool/thin → 10s+ red/thick), so a healthy graph stays cool. Root nodes on the right are where each chain bottoms out, coloured by what they await; <b>fan-in</b> onto one node marks a shared upstream. <b>Drag</b> a node to rearrange it; <b>double-click</b> a node to focus its connected subtree, then “show all nodes” to reset. Hover a node/edge for exact values.",
           ),
         );
-        if (GRAPH_FILTER) {
-          out.push("<div class=graphbar><button id=gfilterclear>show all nodes</button></div>");
+        if (GRAPH_FILTER || GRAPH_HIGHLIGHT) {
+          out.push(
+            "<div class=graphbar><button id=gfilterclear>" +
+              (GRAPH_FILTER ? "show all nodes" : "clear highlight") +
+              "</button></div>",
+          );
         }
         out.push("<div class=graphwrap>" + graphSvg(data.chains, SHOWN.graph) + "</div>");
         out.push(moreBtn("graph", data.chains.length));
@@ -1557,15 +1642,16 @@
         out.push("<h2>Worst chain per pipeline (downstream → upstream root)</h2>");
         out.push(
           info(
-            "For each of the slowest pipelines, its single most-stuck path traced to the root, with the wait at each hop. Read top→bottom: the first line is the slow pipeline; indented lines are successively further upstream. The badge shows what each hop is blocked on, and where the chain bottoms out is the cause — <b>Source/UpstreamSinkUnion</b> = ingestion, <b>wait_pending_fetch_block</b> = storage. When every wait is small and similar, the cluster is healthy and no single path is meaningful — read the roots table above for the overall picture.",
+            "For each of the slowest pipelines, its single most-stuck path traced to the root, with the wait at each hop. Read top→bottom: the first line is the slow pipeline; indented lines are successively further upstream. The badge shows what each hop is blocked on, and where the chain bottoms out is the cause — <b>Source/UpstreamSinkUnion</b> = ingestion, <b>wait_pending_fetch_block</b> = storage. When every wait is small and similar, the cluster is healthy and no single path is meaningful — read the roots table above for the overall picture. <b>Click a chain</b> to highlight its nodes in the graph above.",
           ),
         );
         for (const ch of data.chains.slice(0, SHOWN.chains)) {
           out.push(
-            "<div class=chain><div class=title><span class=mono>" +
+            `<div class="chain clickable" data-pipeline="${esc(ch.pipeline)}" title="Show this pipeline in the graph above">` +
+              "<div class=title><span class=mono>" +
               esc(ch.pipeline) +
               "</span>" +
-              `<span class=meta>max ${ch.max_wait.toFixed(2)}s · ${nf(ch.actor_count)} actors</span></div>`,
+              `<span class=meta>max ${ch.max_wait.toFixed(2)}s · ${nf(ch.actor_count)} actors · focus ↑</span></div>`,
           );
           ch.hops.forEach(([nm, wait, cat], depth) => {
             const arm = "&nbsp;&nbsp;".repeat(depth) + (depth ? "↳ " : "");
@@ -1619,7 +1705,12 @@
           tableHTML(
             "awaits",
             [
-              { label: "Await point", type: "text", get: (r) => r[0] },
+              {
+                label: "Await point",
+                type: "text",
+                get: (r) => r[0],
+                cell: (r) => `<td>${esc(r[0])}${infoIcon(awaitPointDesc(r[0]), r[0])}</td>`,
+              },
               { label: "Actors", type: "num", get: (r) => r[1], cell: (r) => `<td class=num>${nf(r[1])}</td>` },
               {
                 label: "Share",
@@ -2055,6 +2146,32 @@
         wireGraphDrag();
       }
 
+      // The connected component containing `node`, computed from the full chain set (not the current view).
+      function componentOf(node) {
+        const adj = {};
+        const add = (a, b) => (adj[a] = adj[a] || []).push(b);
+        for (const ch of (STATE && STATE._data && STATE._data.chains) || [])
+          for (let i = 1; i < ch.hops.length; i++) {
+            add(ch.hops[i - 1][0], ch.hops[i][0]);
+            add(ch.hops[i][0], ch.hops[i - 1][0]);
+          }
+        const seen = new Set([node]),
+          q = [node];
+        while (q.length) {
+          const c = q.shift();
+          for (const nb of adj[c] || []) if (!seen.has(nb)) (seen.add(nb), q.push(nb));
+        }
+        return seen;
+      }
+      // Focus a node's subtree: restrict the graph to its component (used by double-clicking a node).
+      function focusSubtree(node) {
+        GRAPH_FILTER = componentOf(node);
+        GRAPH_HIGHLIGHT = null; // a plain focus has no in-component highlight
+        LAYOUT = "planar";
+        CUSTOM_POS = {};
+        draw();
+      }
+
       // click-and-drag to reposition graph nodes; connected edges follow.
       function wireGraphDrag() {
         const svg = $("body").querySelector(".graphwrap svg");
@@ -2084,30 +2201,6 @@
           ed.setAttribute("d", gedgeD(x1, y1, x2, y2));
         };
         // focus a node's connected subtree (component) via BFS, then re-layout
-        const focusSubtree = (node) => {
-          const adj = {};
-          const add = (a, b) => {
-            (adj[a] = adj[a] || []).push(b);
-          };
-          edges.forEach((ed) => {
-            add(ed.dataset.from, ed.dataset.to);
-            add(ed.dataset.to, ed.dataset.from);
-          });
-          const seen = new Set([node]),
-            q = [node];
-          while (q.length) {
-            const c = q.shift();
-            for (const nb of adj[c] || [])
-              if (!seen.has(nb)) {
-                seen.add(nb);
-                q.push(nb);
-              }
-          }
-          GRAPH_FILTER = seen;
-          LAYOUT = "planar";
-          CUSTOM_POS = {};
-          draw();
-        };
         // We can't rely on the native "dblclick" event: pointerdown calls preventDefault + setPointerCapture
         // for dragging, which suppresses the browser's synthesized click/dblclick. So detect a double-click
         // manually — two taps on the same node, neither of which moved.
@@ -2176,7 +2269,8 @@
         TABLE_STATE = {};
         LAYOUT = "planar";
         CUSTOM_POS = {};
-        GRAPH_FILTER = null; // reset sort/filter/layout for the new file
+        GRAPH_FILTER = null;
+        GRAPH_HIGHLIGHT = null; // reset sort/filter/layout for the new file
         $("fn").textContent = STATE.source;
         $("summary").textContent =
           `${nf(STATE.actors.length)} actors · ${nf(STATE.jvm.length)} JVM threads` +
@@ -2307,12 +2401,69 @@
         }
       });
 
+      // (i) popover on each root-await row — Popover API, shown on hover/focus, positioned by the icon.
+      const rootpop = $("rootpop");
+      if (rootpop && !rootpop.showPopover) rootpop.remove(); // no Popover API support -> don't leave a stray box
+      function showRootPop(el) {
+        const desc = el.dataset.desc;
+        if (!desc || !rootpop.showPopover) return;
+        rootpop.textContent = desc;
+        try {
+          if (!rootpop.matches(":popover-open")) rootpop.showPopover();
+        } catch (_) {}
+        const r = el.getBoundingClientRect();
+        const pw = rootpop.offsetWidth,
+          ph = rootpop.offsetHeight;
+        let left = r.left,
+          top = r.bottom + 6;
+        if (left + pw > innerWidth - 8) left = innerWidth - 8 - pw;
+        if (top + ph > innerHeight - 8) top = r.top - 6 - ph; // flip above if it would overflow
+        rootpop.style.left = Math.max(8, left) + "px";
+        rootpop.style.top = Math.max(8, top) + "px";
+      }
+      function hideRootPop() {
+        try {
+          if (rootpop.matches(":popover-open")) rootpop.hidePopover();
+        } catch (_) {}
+      }
+      $("body").addEventListener("mouseover", (e) => {
+        const el = e.target.closest && e.target.closest("[data-desc]");
+        if (el) showRootPop(el);
+      });
+      $("body").addEventListener("mouseout", (e) => {
+        const el = e.target.closest && e.target.closest("[data-desc]");
+        if (el && !el.contains(e.relatedTarget)) hideRootPop();
+      });
+      $("body").addEventListener("focusin", (e) => {
+        const el = e.target.closest && e.target.closest("[data-desc]");
+        if (el) showRootPop(el);
+      });
+      $("body").addEventListener("focusout", (e) => {
+        const el = e.target.closest && e.target.closest("[data-desc]");
+        if (el) hideRootPop();
+      });
+
       // report controls
       $("body").addEventListener("click", (e) => {
         if (!e.target.closest) return;
         if (e.target.id === "gfilterclear") {
           GRAPH_FILTER = null;
+          GRAPH_HIGHLIGHT = null;
           draw();
+          return;
+        }
+        const chain = e.target.closest(".chain.clickable");
+        if (chain && chain.dataset.pipeline) {
+          const chains = (STATE._data && STATE._data.chains) || [];
+          const ch = chains.find((c) => c.pipeline === chain.dataset.pipeline);
+          if (ch) {
+            GRAPH_FILTER = componentOf(ch.hops[0][0]); // first: restrict to this chain's component
+            GRAPH_HIGHLIGHT = new Set(ch.hops.map((h) => h[0])); // then: spotlight the exact chain nodes
+            LAYOUT = "planar";
+            CUSTOM_POS = {};
+            draw();
+            $("body").querySelector(".graphwrap")?.scrollIntoView({ behavior: "smooth", block: "start" }); // scroll up
+          }
           return;
         }
         const more = e.target.closest(".more");
@@ -2324,6 +2475,7 @@
             LAYOUT = "planar";
             CUSTOM_POS = {};
             GRAPH_FILTER = null;
+            GRAPH_HIGHLIGHT = null;
           } // node set changed -> re-layout cleanly (fixes custom overlap)
           draw();
           return;
