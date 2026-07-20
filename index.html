@@ -764,34 +764,92 @@
         Now: "gray",
       };
       // Reader-facing description per root-await category, shown in the (i) popover on each root row.
-      const CAT_DESC = {
-        Source: "Waiting on ingestion — new data arriving from an upstream source (Kafka, CDC, etc.).",
-        wait_pending_fetch_block: "Reading state from storage — the object store (S3) or the local cache.",
-        receive_barrier: "Waiting for the next checkpoint barrier to arrive. Usually normal propagation, not a stall.",
-        "Wait For New Buffer Item": "A sink with nothing to send right now — it has emitted everything available.",
+      // Single source of truth for what an await point / root await means. Shared by the "Await roots"
+      // and "Primary await-point" tables (they draw from the same set of RisingWave span names).
+      // Keyed by the normalised span name; describeAwait() also maps Remote/LocalInput and unknown
+      // operators. Names come from the RisingWave streaming engine (executors, exchange, barrier
+      // manager, state store) and the await-tree instrumentation.
+      const AWAIT_DESC = {
+        // ── ingestion ──
+        Source: "Waiting on ingestion — new data from the source connector (Kafka, Pulsar, CDC, S3, …).",
+        SourceBackfill: "Backfilling historical rows from the source before catching up to the live stream.",
+        // ── inter-actor data exchange ──
+        RemoteInput:
+          "Waiting for data from an upstream actor on a different compute node — it arrives over the network.",
+        LocalInput:
+          "Waiting for data from an upstream actor on the same compute node — an in-process channel, no network hop.",
+        input: "Waiting on data from an upstream actor in the pipeline.",
+        Merge: "Merging input from several upstream actors and aligning them on the checkpoint barrier.",
+        Receiver: "Receiving from a single upstream actor.",
+        hash_join_barrier_align: "A join holding its faster input while it waits for the barrier on the slower one.",
+        // ── checkpoint barriers ──
+        receive_barrier:
+          "Waiting for the next checkpoint barrier to arrive from upstream — usually normal propagation.",
+        BarrierRecv: "Waiting for the next checkpoint barrier — usually normal propagation.",
+        next_scheduled_barrier: "The barrier scheduler idling until the next checkpoint is due (background task).",
+        next_barrier: "Waiting for the next checkpoint barrier to be scheduled (background task).",
+        control_stream_next_event: "The barrier control stream idling for its next event (background task).",
+        // ── state store (Hummock / object store) ──
+        wait_pending_fetch_block:
+          "Reading a data block from the state store — a cache miss fetching from object storage (S3).",
+        wait_epoch: "Waiting for the state store to make a committed epoch readable.",
+        may_exist: "Checking the state store for a key (bloom-filter / block lookup).",
+        iter: "Scanning a range from the state store (object storage / cache).",
+        get: "Point-looking-up a key in the state store (object storage / cache).",
+        // ── sinks ──
+        "Wait For New Buffer Item": "A sink with nothing new to send — it has emitted everything currently available.",
+        consume_log: "A sink reading its internal log to emit downstream; idle when it has caught up.",
         UpstreamSinkUnion: "Reading a base table that is fed by an upstream source or sink.",
-        input: "Waiting on data from an upstream actor in the same pipeline.",
-        Merge: "Combining input from several upstream actors before the next operator.",
-        DynamicFilter: "Waiting inside a dynamic-filter operator (e.g. a value that gates a join or filter).",
-        Now: "Waiting on the current processing time — a time-based operator such as a temporal filter or window.",
+        LogStore: "Reading/writing the sink's log store (buffered rows awaiting delivery).",
+        // ── operators (interior steps that can be the deepest wait) ──
+        HashJoin: "Inside a hash join — matching rows across its two inputs.",
+        TemporalJoin: "Inside a temporal join — looking up the versioned/append-only side.",
+        Lookup: "Inside a lookup (index/arrangement) join.",
+        HashAgg: "Inside a hash aggregation — updating per-group state.",
+        SimpleAgg: "Inside a global (un-grouped) aggregation.",
+        StatelessSimpleAgg: "Inside a stateless aggregation step.",
+        GroupTopN: "Inside a per-group Top-N (ranking within each group).",
+        TopN: "Inside a Top-N (global ranking).",
+        AppendOnlyTopN: "Inside an append-only Top-N.",
+        Materialize: "Writing results into the materialized-view / table state.",
+        Sink: "Handing rows to the sink connector.",
+        Project: "Evaluating projection expressions.",
+        Filter: "Evaluating a filter predicate.",
+        DynamicFilter: "Inside a dynamic filter — a value from one side gates rows on the other.",
+        Now: "Waiting on processing time — a time-based operator such as a temporal filter or window.",
+        Union: "Unioning rows from multiple inputs.",
+        Expand: "Expanding rows (e.g. grouping-sets / rollup).",
+        OverWindow: "Inside an over-window (window-function) operator.",
+        EowcOverWindow: "Inside an emit-on-window-close over-window operator.",
+        WatermarkFilter: "Dropping rows behind the current watermark.",
+        StreamScan: "Backfilling a materialized view / table from its historical snapshot.",
+        Backfill: "Backfilling historical rows before switching to the live stream.",
+        Chain: "Backfilling from an upstream table/MV, then chaining onto its live stream.",
+        Dedup: "De-duplicating rows against stored keys.",
+        Values: "Emitting constant rows.",
+        ProjectSet: "Evaluating a set-returning projection (e.g. unnest).",
       };
-      function rootDesc(label) {
+      const IDLE_NOTE =
+        " Marked (idle): long-running and simply waiting for new work — expected, and not backpressure.";
+      // Describe any await-point / root-await label (with optional " (idle)" suffix). The single lookup
+      // used by both tables.
+      function describeAwait(label) {
         const idle = / \(idle\)$/.test(label);
         const base = label.replace(/ \(idle\)$/, "");
-        const d = CAT_DESC[base] || (base ? "Waiting inside the " + base + " operator." : "Waiting.");
-        const idleNote = " Marked (idle): long-running and simply waiting for new work — expected, not backpressure.";
-        return idle ? d + idleNote : d;
+        const key = base.startsWith("RemoteInput")
+          ? "RemoteInput"
+          : base.startsWith("LocalInput")
+            ? "LocalInput"
+            : base;
+        const d =
+          AWAIT_DESC[key] ||
+          AWAIT_DESC[normaliseCategory(base)] ||
+          (base ? "Waiting inside the " + base + " operator." : "Waiting.");
+        return idle ? d + IDLE_NOTE : d;
       }
-      // Await-point descriptions distinguish Remote vs Local input (same category, different transport).
-      function awaitPointDesc(label) {
-        if (/^RemoteInput\b/.test(label))
-          return "Waiting for data from an upstream actor on a different compute node — it arrives over the network (an exchange/RPC).";
-        if (/^LocalInput\b/.test(label))
-          return "Waiting for data from an upstream actor on the same compute node — an in-process channel, no network hop.";
-        return rootDesc(normaliseCategory(label));
-      }
-      // the (i) icon markup used in tables; hovering it shows `desc` in the shared popover
-      function infoIcon(desc, label) {
+      // the (i) icon markup used in tables; hovering it shows the description in the shared popover
+      function infoIcon(label) {
+        const desc = describeAwait(label);
         return desc
           ? ` <span class=rootinfo tabindex=0 role=button aria-label="What “${esc(label)}” means" data-desc="${esc(desc)}">i</span>`
           : "";
@@ -1212,10 +1270,10 @@
       function nf(n) {
         return n.toLocaleString("en-US");
       }
-      function barRow(label, count, total, desc) {
+      function barRow(label, count, total, withInfo) {
         const pct = total ? (count / total) * 100 : 0;
         return (
-          `<tr><td>${esc(label)}${infoIcon(desc, label)}</td><td class=num>${nf(count)}</td>` +
+          `<tr><td>${esc(label)}${withInfo ? infoIcon(label) : ""}</td><td class=num>${nf(count)}</td>` +
           `<td style="width:55%"><div class=barcell><span style="width:${pct.toFixed(1)}%"></span>` +
           `<em>${pct.toFixed(1)}%</em></div></td></tr>`
         );
@@ -1256,9 +1314,15 @@
         SHOWN = {};
         for (const k in SECTION_CFG) SHOWN[k] = SECTION_CFG[k].init;
       }
+      // How many rows to actually display: if fewer than 5 remain hidden, just show them all (no point
+      // making the user click "show more" for one or two extra rows).
+      function effShown(key, total) {
+        const shown = SHOWN[key] || 0;
+        return total - shown < 5 ? total : shown;
+      }
       function moreBtn(key, total) {
         const shown = SHOWN[key] || 0;
-        if (shown >= total) return "";
+        if (effShown(key, total) >= total) return "";
         return `<button class=more data-sec="${key}">Show more… (${total - shown} more)</button>`;
       }
 
@@ -1284,7 +1348,7 @@
             return c.type === "num" ? (x - y) * st.dir : String(x).localeCompare(String(y)) * st.dir;
           });
         }
-        const shown = full.slice(0, SHOWN[secKey] || 0);
+        const shown = full.slice(0, effShown(secKey, full.length));
         const ths = columns
           .map((c, i) => {
             const ar = st.sort === i ? (st.dir < 0 ? " ▾" : " ▴") : "";
@@ -1326,18 +1390,23 @@
         GNODE_H = 44,
         GCOL_W = 232,
         GROW_H = 66; // shared by graphSvg and the drag handler
-      // Edge path: run flat along the source row through the intervening (clear) columns,
-      // then do the whole vertical S-bend inside the last gap before the target node.
-      function gedgeD(x1, y1, x2, y2) {
-        const gap = GCOL_W - GNODE_W,
-          xt = Math.max(x1, x2 - gap),
-          c = (x2 - xt) * 0.5;
-        return `M${x1},${y1} L${xt},${y1} C${xt + c},${y1} ${x2 - c},${y2} ${x2},${y2}`;
+      // Smooth path through a list of [x,y] waypoints (source-right, any dummy centres, target-left),
+      // with horizontal tangents at each point — used to route multi-column edges around nodes.
+      function edgePath(pts) {
+        let d = `M${pts[0][0]},${pts[0][1]}`;
+        for (let i = 1; i < pts.length; i++) {
+          const [x0, y0] = pts[i - 1],
+            [x1, y1] = pts[i],
+            dx = (x1 - x0) * 0.5;
+          d += ` C${x0 + dx},${y0} ${x1 - dx},${y1} ${x1},${y1}`;
+        }
+        return d;
       }
       let LAYOUT = "planar"; // "planar" | "custom"  (severity layout deprecated)
       let CUSTOM_POS = {}; // node name -> [x,y] in custom mode
       let GRAPH_FILTER = null; // Set of node names to restrict the graph to (subtree focus), or null
-      let GRAPH_HIGHLIGHT = null; // Set of node names to spotlight (from a clicked chain); others dimmed
+      let GRAPH_HIGHLIGHT = null; // Set of node names to spotlight (clicked chain/node); others dimmed
+      let LAST_TAP = { node: null, t: 0 }; // module-scoped so it survives the redraw a single tap triggers
 
       // median-heuristic crossing reduction for a layered DAG (fewer edge crossings ≈ planar)
       function planarOrder(cols, maxLayer, preds, succ) {
@@ -1490,13 +1559,45 @@
           pushMap(cols, l, n);
           if (l > maxLayer) maxLayer = l;
         }
+        // Route edges that span >1 layer through dummy waypoints: give each such edge a placeholder in
+        // every intermediate column so the ordering/coordinate passes reserve a gap there and the edge
+        // threads between real nodes instead of cutting straight through them.
+        const routes = new Map(); // edge key -> [f, ...dummyIds, t]
+        let dseq = 0;
+        for (const k of [...edges.keys()]) {
+          const [f, t] = k.split("");
+          const lf = layer.get(f),
+            lt = layer.get(t);
+          if (lt - lf <= 1) continue;
+          const chain = [f];
+          let prev = f;
+          for (let l = lf + 1; l < lt; l++) {
+            const d = "@@dummy" + dseq++; // dummy id (cannot collide with a node name)
+            pushMap(cols, l, d);
+            pushMap(preds, d, prev);
+            pushMap(succ, prev, d);
+            chain.push(d);
+            prev = d;
+          }
+          pushMap(preds, t, prev);
+          pushMap(succ, prev, t);
+          const pt = preds.get(t),
+            pi = pt.lastIndexOf(f);
+          if (pi >= 0) pt.splice(pi, 1); // drop the direct f->t link (now via dummies)
+          const sf = succ.get(f),
+            si = sf.lastIndexOf(t);
+          if (si >= 0) sf.splice(si, 1);
+          chain.push(t);
+          routes.set(k, chain);
+        }
         const NW = GNODE_W,
           NH = GNODE_H,
           COLW = 232,
           ROWH = 66,
           PADX = 16,
           PADY = 16;
-        for (let l = 0; l <= maxLayer; l++) (cols.get(l) || []).sort((a, b) => nodes.get(b).wait - nodes.get(a).wait); // init order (by wait)
+        const wof = (id) => (nodes.get(id) ? nodes.get(id).wait : 0); // dummies (not in nodes) sort as 0
+        for (let l = 0; l <= maxLayer; l++) (cols.get(l) || []).sort((a, b) => wof(b) - wof(a)); // init order (by wait)
         const order = planarOrder(cols, maxLayer, preds, succ);
         const yy = assignY(order, maxLayer, preds, succ, ROWH);
         const pos = new Map();
@@ -1543,18 +1644,20 @@
         // no arrowheads: direction is implicit (downstream on the left, roots on the right)
         for (const [k, w] of edges) {
           const [f, t] = k.split("");
-          const a = pos.get(f),
-            b = pos.get(t);
-          if (!a || !b) continue;
-          const x1 = a.x + NW,
-            y1 = a.y + NH / 2,
-            x2 = b.x,
-            y2 = b.y + NH / 2;
+          if (!pos.get(f) || !pos.get(t)) continue;
+          // Dummy-waypoint routing only applies to the auto (planar) layout. In custom mode the user
+          // has placed nodes freely, so route edges directly between endpoints (dummies are meaningless).
+          const route = LAYOUT === "custom" ? [f, t] : routes.get(k) || [f, t];
+          const pts = route.map((id, i) => {
+            const p = pos.get(id);
+            if (i === 0) return [p.x + NW, p.y + NH / 2]; // source right edge
+            if (i === route.length - 1) return [p.x, p.y + NH / 2]; // target left edge
+            return [p.x + NW / 2, p.y + NH / 2]; // dummy waypoint: column centre (a reserved gap row)
+          });
           const t01 = Math.min(w / EDGE_MAX_S, 1); // colour/width on an ABSOLUTE 0..10s scale, not relative to max
           const sw = (1.2 + 5 * t01).toFixed(1);
-          // when a chain is highlighted, dim edges that aren't between two highlighted nodes
           const eop = GRAPH_HIGHLIGHT && !(GRAPH_HIGHLIGHT.has(f) && GRAPH_HIGHLIGHT.has(t)) ? 0.1 : 0.85;
-          s += `<path class=gedge data-from="${esc(f)}" data-to="${esc(t)}" d="${gedgeD(x1, y1, x2, y2)}" fill=none stroke="${edgeColor(t01)}" stroke-opacity="${eop}" stroke-width=${sw}><title>${esc(f)} → ${esc(t)}: ${w.toFixed(2)}s</title></path>`;
+          s += `<path class=gedge data-from="${esc(f)}" data-to="${esc(t)}" d="${edgePath(pts)}" fill=none stroke="${edgeColor(t01)}" stroke-opacity="${eop}" stroke-width=${sw}><title>${esc(f)} → ${esc(t)}: ${w.toFixed(2)}s</title></path>`;
         }
         for (const [n, nd] of nodes) {
           const p = pos.get(n),
@@ -1609,14 +1712,45 @@
         );
         out.push(
           "<table><thead><tr><th>Root await</th><th class=num>Actors</th><th>Share</th></tr></thead><tbody>" +
-            data.root_split.map(([l, c]) => barRow(l, c, total, rootDesc(l))).join("") +
+            data.root_split.map(([l, c]) => barRow(l, c, total, true)).join("") +
             "</tbody></table>",
+        );
+
+        out.push("<h2>Primary await-point (all actors)</h2>");
+        out.push(
+          info(
+            "What actors are <b>directly</b> blocked on right now (one hop — not traced to root). <b>RemoteInput/LocalInput</b> = waiting for data from an upstream actor (normal idling or backpressure); <b>Source</b> = ingestion; <b>Wait For New Buffer Item</b> = a starved sink; <b>receive_barrier</b> = awaiting the barrier. Lots of input-waiting is expected — the roots section above is what tells you the underlying cause.",
+          ),
+        );
+        out.push(
+          tableHTML(
+            "awaits",
+            [
+              {
+                label: "Await point",
+                type: "text",
+                get: (r) => r[0],
+                cell: (r) => `<td>${esc(r[0])}${infoIcon(r[0])}</td>`,
+              },
+              { label: "Actors", type: "num", get: (r) => r[1], cell: (r) => `<td class=num>${nf(r[1])}</td>` },
+              {
+                label: "Share",
+                type: "num",
+                get: (r) => r[1],
+                cell: (r) => {
+                  const p = (r[1] / total) * 100;
+                  return `<td style="width:55%"><div class=barcell><span style="width:${p.toFixed(1)}%"></span><em>${p.toFixed(1)}%</em></div></td>`;
+                },
+              },
+            ],
+            data.await_points,
+          ),
         );
 
         out.push("<h2>Longest await chains</h2>");
         out.push(
           info(
-            "A graph of the chains with the longest waits. Each <b>node</b> is a pipeline; an <b>edge</b> connects a downstream pipeline to the upstream one it awaits — downstream on the left, roots on the right. An edge’s <b>thickness and colour</b> show the wait time on a fixed scale (0s cool/thin → 10s+ red/thick), so a healthy graph stays cool. Root nodes on the right are where each chain bottoms out, coloured by what they await; <b>fan-in</b> onto one node marks a shared upstream. <b>Drag</b> a node to rearrange it; <b>double-click</b> a node to focus its connected subtree, then “show all nodes” to reset. Hover a node/edge for exact values.",
+            "A graph of the chains with the longest waits. Each <b>node</b> is a pipeline; an <b>edge</b> connects a downstream pipeline to the upstream one it awaits — downstream on the left, roots on the right. An edge’s <b>thickness and colour</b> show the wait time on a fixed scale (0s cool/thin → 10s+ red/thick), so a healthy graph stays cool. Root nodes on the right are where each chain bottoms out, coloured by what they await; <b>fan-in</b> onto one node marks a shared upstream. Controls: <b>drag</b> a node to move it; <b>click</b> a node to highlight its influence (everything up- and downstream of it); <b>double-click</b> a node to filter the graph to just its connected component; click the empty background to clear a highlight. Hover a node/edge for exact values.",
           ),
         );
         if (GRAPH_FILTER || GRAPH_HIGHLIGHT) {
@@ -1626,7 +1760,7 @@
               "</button></div>",
           );
         }
-        out.push("<div class=graphwrap>" + graphSvg(data.chains, SHOWN.graph) + "</div>");
+        out.push("<div class=graphwrap>" + graphSvg(data.chains, effShown("graph", data.chains.length)) + "</div>");
         out.push(moreBtn("graph", data.chains.length));
         out.push(
           "<div class=glegend>" +
@@ -1645,7 +1779,7 @@
             "For each of the slowest pipelines, its single most-stuck path traced to the root, with the wait at each hop. Read top→bottom: the first line is the slow pipeline; indented lines are successively further upstream. The badge shows what each hop is blocked on, and where the chain bottoms out is the cause — <b>Source/UpstreamSinkUnion</b> = ingestion, <b>wait_pending_fetch_block</b> = storage. When every wait is small and similar, the cluster is healthy and no single path is meaningful — read the roots table above for the overall picture. <b>Click a chain</b> to highlight its nodes in the graph above.",
           ),
         );
-        for (const ch of data.chains.slice(0, SHOWN.chains)) {
+        for (const ch of data.chains.slice(0, effShown("chains", data.chains.length))) {
           out.push(
             `<div class="chain clickable" data-pipeline="${esc(ch.pipeline)}" title="Show this pipeline in the graph above">` +
               "<div class=title><span class=mono>" +
@@ -1692,37 +1826,6 @@
               { label: "actors", type: "num", get: (r) => r[2], cell: (r) => `<td class=num>${nf(r[2])}</td>` },
             ],
             data.pipelines,
-          ),
-        );
-
-        out.push("<h2>Primary await-point (all actors)</h2>");
-        out.push(
-          info(
-            "What actors are <b>directly</b> blocked on right now (one hop — not traced to root). <b>RemoteInput/LocalInput</b> = waiting for data from an upstream actor (normal idling or backpressure); <b>Source</b> = ingestion; <b>Wait For New Buffer Item</b> = a starved sink; <b>receive_barrier</b> = awaiting the barrier. Lots of input-waiting is expected — the roots section above is what tells you the underlying cause.",
-          ),
-        );
-        out.push(
-          tableHTML(
-            "awaits",
-            [
-              {
-                label: "Await point",
-                type: "text",
-                get: (r) => r[0],
-                cell: (r) => `<td>${esc(r[0])}${infoIcon(awaitPointDesc(r[0]), r[0])}</td>`,
-              },
-              { label: "Actors", type: "num", get: (r) => r[1], cell: (r) => `<td class=num>${nf(r[1])}</td>` },
-              {
-                label: "Share",
-                type: "num",
-                get: (r) => r[1],
-                cell: (r) => {
-                  const p = (r[1] / total) * 100;
-                  return `<td style="width:55%"><div class=barcell><span style="width:${p.toFixed(1)}%"></span><em>${p.toFixed(1)}%</em></div></td>`;
-                },
-              },
-            ],
-            data.await_points,
           ),
         );
 
@@ -2163,6 +2266,31 @@
         }
         return seen;
       }
+      // A node's "influence": only its ancestors (upstream) and descendants (downstream) — following edge
+      // direction, so siblings/cousins are excluded. Used by single-clicking a node to highlight.
+      function influenceOf(node) {
+        const up = {},
+          down = {};
+        const add = (m, a, b) => (m[a] = m[a] || []).push(b);
+        for (const ch of (STATE && STATE._data && STATE._data.chains) || [])
+          for (let i = 1; i < ch.hops.length; i++) {
+            const f = ch.hops[i - 1][0],
+              t = ch.hops[i][0]; // f (downstream) awaits t (upstream)
+            add(up, f, t); // upstream direction
+            add(down, t, f); // downstream direction
+          }
+        const seen = new Set([node]);
+        const walk = (adj) => {
+          const q = [node];
+          while (q.length) {
+            const c = q.shift();
+            for (const nb of adj[c] || []) if (!seen.has(nb)) (seen.add(nb), q.push(nb));
+          }
+        };
+        walk(up); // all ancestors
+        walk(down); // all descendants
+        return seen;
+      }
       // Focus a node's subtree: restrict the graph to its component (used by double-clicking a node).
       function focusSubtree(node) {
         GRAPH_FILTER = componentOf(node);
@@ -2186,26 +2314,21 @@
           p.y = e.clientY;
           return m ? p.matrixTransform(m.inverse()) : { x: e.clientX, y: e.clientY };
         };
+        // Dragging always happens in custom layout, where edges route directly between endpoints (matching
+        // how graphSvg draws them in custom mode) — so there's no routing switch between drag and release.
         const updEdge = (ed) => {
           const a = nodeEls[ed.dataset.from],
             b = nodeEls[ed.dataset.to];
           if (!a || !b) return;
-          const ax = +a.dataset.x,
-            ay = +a.dataset.y,
-            bx = +b.dataset.x,
-            by = +b.dataset.y;
-          const x1 = ax + GNODE_W,
-            y1 = ay + GNODE_H / 2,
-            x2 = bx,
-            y2 = by + GNODE_H / 2;
-          ed.setAttribute("d", gedgeD(x1, y1, x2, y2));
+          const p0 = [+a.dataset.x + GNODE_W, +a.dataset.y + GNODE_H / 2];
+          const p1 = [+b.dataset.x, +b.dataset.y + GNODE_H / 2];
+          ed.setAttribute("d", edgePath([p0, p1]));
         };
         // focus a node's connected subtree (component) via BFS, then re-layout
         // We can't rely on the native "dblclick" event: pointerdown calls preventDefault + setPointerCapture
         // for dragging, which suppresses the browser's synthesized click/dblclick. So detect a double-click
         // manually — two taps on the same node, neither of which moved.
-        let drag = null,
-          lastTap = { node: null, t: 0 };
+        let drag = null;
         svg.addEventListener("pointerdown", (e) => {
           const g = e.target.closest && e.target.closest(".gnode");
           if (!g) return;
@@ -2253,15 +2376,25 @@
           }
           if (!isUp) return; // cancelled, not a tap
           const now = Date.now(); // no movement => a tap; two taps on the same node = double-click
-          if (lastTap.node === node && now - lastTap.t < 350) {
-            lastTap = { node: null, t: 0 };
-            focusSubtree(node);
+          if (LAST_TAP.node === node && now - LAST_TAP.t < 350) {
+            LAST_TAP = { node: null, t: 0 };
+            focusSubtree(node); // double-click -> filter to this node's component/subtree
           } else {
-            lastTap = { node, t: now };
+            LAST_TAP = { node, t: now };
+            GRAPH_HIGHLIGHT = influenceOf(node); // single-click -> highlight its ancestors + descendants only
+            draw();
           }
         };
         svg.addEventListener("pointerup", () => finish(true));
         svg.addEventListener("pointercancel", () => finish(false));
+        // click on empty graph background -> clear any highlight
+        svg.addEventListener("click", (e) => {
+          if (e.target.closest && e.target.closest(".gnode")) return; // node taps handled above
+          if (GRAPH_HIGHLIGHT) {
+            GRAPH_HIGHLIGHT = null;
+            draw();
+          }
+        });
       }
       function recompute() {
         if (!STATE) return;
@@ -2270,7 +2403,8 @@
         LAYOUT = "planar";
         CUSTOM_POS = {};
         GRAPH_FILTER = null;
-        GRAPH_HIGHLIGHT = null; // reset sort/filter/layout for the new file
+        GRAPH_HIGHLIGHT = null;
+        LAST_TAP = { node: null, t: 0 }; // reset sort/filter/layout/selection for the new file
         $("fn").textContent = STATE.source;
         $("summary").textContent =
           `${nf(STATE.actors.length)} actors · ${nf(STATE.jvm.length)} JVM threads` +
@@ -2387,6 +2521,9 @@
 
       // paste anywhere, regardless of focus (file or raw text)
       document.addEventListener("paste", (e) => {
+        const el = e.target;
+        // don't hijack pastes into a text field (e.g. the meta host input) — let them paste normally
+        if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
         const cd = e.clipboardData;
         if (!cd) return;
         if (cd.files && cd.files.length) {
