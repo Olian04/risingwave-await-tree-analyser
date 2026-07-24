@@ -431,6 +431,19 @@
       .graphbar button {
         padding: 4px 10px;
       }
+      .gtoggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--mut);
+        font-size: 12px;
+        cursor: pointer;
+        user-select: none;
+      }
+      .gtoggle input {
+        margin: 0;
+        cursor: pointer;
+      }
       .glegend {
         display: flex;
         gap: 14px;
@@ -1390,99 +1403,328 @@
         GNODE_H = 44,
         GCOL_W = 232,
         GROW_H = 66; // shared by graphSvg and the drag handler
-      // Smooth path through a list of [x,y] waypoints (source-right, any dummy centres, target-left),
-      // with horizontal tangents at each point — used to route multi-column edges around nodes.
-      function edgePath(pts) {
+      // Smooth curve through a list of [x,y] waypoints (source-right, any dummy centres, target-left).
+      // Each segment is a cubic with HORIZONTAL tangents at both ends, so within the segment the curve
+      // stays inside the [x0..x1] × [y0..y1] box of its two waypoints (the y-component is a monotone
+      // smoothstep — no overshoot). The layout drops the waypoints in the clear channels between nodes,
+      // so the curve snakes between them and never bulges across a node.
+      function edgePath(pts, cap = Infinity) {
         let d = `M${pts[0][0]},${pts[0][1]}`;
         for (let i = 1; i < pts.length; i++) {
           const [x0, y0] = pts[i - 1],
-            [x1, y1] = pts[i],
-            dx = (x1 - x0) * 0.5;
+            [x1, y1] = pts[i];
+          // horizontal tangent length; capping it keeps long segments close to the straight line (used by
+          // the grid router, whose straight runs are already node-clear so the curve mustn't bow off them)
+          const dx = Math.sign(x1 - x0) * Math.min(Math.abs(x1 - x0) * 0.5, cap);
           d += ` C${x0 + dx},${y0} ${x1 - dx},${y1} ${x1},${y1}`;
         }
         return d;
       }
+      // Smooth a waypoint polyline into ONE C1-continuous cubic spline (Catmull–Rom → Bézier). Tangents at
+      // interior points follow the path (so H→V corners round off instead of kinking — no 90° joints), and
+      // are clamped to 45% of the neighbouring segment so the curve can't overshoot off the cleared path.
+      // The endpoints leave/enter horizontally in the flow direction `dir` (+1 = rightward, -1 = leftward),
+      // which keeps the edge from starting off backwards when its node is dragged past the other one.
+      function smoothPath(pts, dir) {
+        const P = pts,
+          n = P.length;
+        if (n === 2) {
+          const m = Math.max(20, Math.abs(P[1][0] - P[0][0]) * 0.4);
+          return `M${P[0][0]},${P[0][1]} C${P[0][0] + dir * m},${P[0][1]} ${P[1][0] - dir * m},${P[1][1]} ${P[1][0]},${P[1][1]}`;
+        }
+        const em = 34,
+          T = new Array(n);
+        T[0] = [dir * em, 0];
+        T[n - 1] = [dir * em, 0];
+        for (let i = 1; i < n - 1; i++) {
+          let tx = (P[i + 1][0] - P[i - 1][0]) * 0.5,
+            ty = (P[i + 1][1] - P[i - 1][1]) * 0.5;
+          const dPrev = Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]);
+          const dNext = Math.hypot(P[i + 1][0] - P[i][0], P[i + 1][1] - P[i][1]);
+          const arm = Math.hypot(tx, ty) / 3,
+            maxArm = 0.45 * Math.min(dPrev, dNext);
+          if (arm > maxArm && arm > 0) {
+            const s = maxArm / arm;
+            tx *= s;
+            ty *= s;
+          }
+          T[i] = [tx, ty];
+        }
+        let d = `M${P[0][0]},${P[0][1]}`;
+        for (let i = 0; i < n - 1; i++) {
+          const c1x = P[i][0] + T[i][0] / 3,
+            c1y = P[i][1] + T[i][1] / 3;
+          const c2x = P[i + 1][0] - T[i + 1][0] / 3,
+            c2y = P[i + 1][1] - T[i + 1][1] / 3;
+          d += ` C${c1x},${c1y} ${c2x},${c2y} ${P[i + 1][0]},${P[i + 1][1]}`;
+        }
+        return d;
+      }
+      // Nearest y to `desired` whose horizontal line clears every occupied [top,bottom] interval by `pad`.
+      function clearY(occ, desired, pad) {
+        const bad = (y) => occ.some(([t, b]) => y > t - pad && y < b + pad);
+        if (!bad(desired)) return desired;
+        let best = desired,
+          bd = Infinity;
+        for (const [t, b] of occ)
+          for (const c of [t - pad, b + pad])
+            if (!bad(c)) {
+              const dd = Math.abs(c - desired);
+              if (dd < bd) {
+                bd = dd;
+                best = c;
+              }
+            }
+        return best;
+      }
+      // True if the straight segment A→B clears every column's nodes (by `pad`) over the x-range it spans.
+      function segClear(A, B, colRanks, L, pad) {
+        const dx = B[0] - A[0] || 1;
+        const yAt = (x) => A[1] + (B[1] - A[1]) * ((x - A[0]) / dx);
+        const xlo = Math.min(A[0], B[0]),
+          xhi = Math.max(A[0], B[0]);
+        for (const c of colRanks) {
+          const xL = L.PADX + c * L.COLW,
+            xR = xL + L.NW;
+          if (xR <= xlo || xL >= xhi) continue; // column not under this segment
+          const a = Math.max(xL, xlo),
+            b = Math.min(xR, xhi);
+          const y0 = yAt(a),
+            y1 = yAt(b),
+            lo = Math.min(y0, y1),
+            hi = Math.max(y0, y1);
+          for (const [t, bb] of L.colNodes[c] || []) if (hi > t - pad && lo < bb + pad) return false;
+        }
+        return true;
+      }
+      // Route one edge from src (source right-edge) to tgt (target left-edge). Give every spanned column a
+      // candidate waypoint in the clear gap nearest the straight src→tgt trend, then keep only the ones a
+      // straight bypass can't skip without hitting a node (greedy furthest-reachable / line-of-sight). So a
+      // waypoint that's become an unnecessary detour — e.g. once the dragged start moves vertically past it —
+      // is dropped, while any waypoint still needed to clear a node stays. Recomputed from the live endpoints,
+      // so it reflows during a drag and never crosses a node. Used by both the render and the drag handler.
+      function routeCols(src, tgt, colRanks, L) {
+        const pad = L.NH / 2 + 8;
+        // Only route through columns still horizontally between the endpoints. Once the dragged start (or
+        // target) moves past a column's x, that column's waypoint is behind the flow and is dropped — the
+        // horizontal analogue of the vertical detour rule.
+        const lo = Math.min(src[0], tgt[0]),
+          hi = Math.max(src[0], tgt[0]);
+        const cols = colRanks.filter((c) => {
+          const xL = L.PADX + c * L.COLW;
+          return xL >= lo && xL + L.NW <= hi;
+        });
+        const span = tgt[0] - src[0] || 1;
+        const raw = cols.map((c) => {
+          const xL = L.PADX + c * L.COLW,
+            xR = xL + L.NW;
+          const f = Math.max(0, Math.min(1, (xL + L.NW / 2 - src[0]) / span));
+          const y = clearY(L.colNodes[c] || [], src[1] + (tgt[1] - src[1]) * f, pad);
+          return { xL, xR, y };
+        });
+        // stops the path may visit, in order: the source, each column's candidate waypoint, the target
+        const stops = [{ x: src[0], y: src[1], wp: null }];
+        for (const w of raw) stops.push({ x: w.xL, y: w.y, wp: w });
+        stops.push({ x: tgt[0], y: tgt[1], wp: null });
+        const kept = [0];
+        let i = 0;
+        while (i < stops.length - 1) {
+          let j = i + 1; // extend as far as a straight segment stays clear
+          for (let k = i + 2; k < stops.length; k++) {
+            if (segClear([stops[i].x, stops[i].y], [stops[k].x, stops[k].y], cols, L, pad)) j = k;
+            else break;
+          }
+          kept.push(j);
+          i = j;
+        }
+        const pts = [src];
+        for (const idx of kept) {
+          const st = stops[idx];
+          if (st.wp) pts.push([st.wp.xL, st.wp.y], [st.wp.xR, st.wp.y]); // horizontal traverse across the clear slot
+        }
+        pts.push(tgt);
+        return pts;
+      }
+      // ===== Experimental grid router (toggle above the graph) =========================================
+      // Overlay a coarse grid on the drawing; any cell covered by a node (padded) is blocked. Route each
+      // edge from the source's right edge to the target's left edge with A* through free cells, then pull
+      // the cell path straight (line-of-sight) into a few waypoints. Waypoints can sit anywhere a cell is
+      // free, so — unlike the column router — edges can weave around a node the user has dragged anywhere.
+      const GRID_CW = 26,
+        GRID_CH = 13,
+        GRID_PAD = 5;
+      function buildGrid(rects, W, H) {
+        const cw = GRID_CW,
+          ch = GRID_CH,
+          cols = Math.max(1, Math.ceil(W / cw) + 1),
+          rows = Math.max(1, Math.ceil(H / ch) + 1);
+        const blocked = new Uint8Array(cols * rows);
+        for (const r of rects) {
+          const ci0 = Math.max(0, Math.floor((r[0] - GRID_PAD) / cw)),
+            ci1 = Math.min(cols - 1, Math.floor((r[2] + GRID_PAD) / cw));
+          const ri0 = Math.max(0, Math.floor((r[1] - GRID_PAD) / ch)),
+            ri1 = Math.min(rows - 1, Math.floor((r[3] + GRID_PAD) / ch));
+          for (let ci = ci0; ci <= ci1; ci++) for (let ri = ri0; ri <= ri1; ri++) blocked[ri * cols + ci] = 1;
+        }
+        return { cw, ch, cols, rows, blocked };
+      }
+      function gridRoute(src, tgt, sRect, tRect, G) {
+        if (!G) return [src, tgt];
+        const { cw, ch, cols, rows, blocked } = G,
+          N = cols * rows;
+        const cl = (v, hi) => (v < 0 ? 0 : v > hi ? hi : v);
+        const sci = cl(Math.floor(src[0] / cw), cols - 1),
+          sri = cl(Math.floor(src[1] / ch), rows - 1);
+        const gci = cl(Math.floor(tgt[0] / cw), cols - 1),
+          gri = cl(Math.floor(tgt[1] / ch), rows - 1);
+        // Confine the search to the horizontal band between the two nodes: a waypoint can only sit between
+        // source and target (never left of the source's front nor right of the target's back), which is
+        // what stops edges from doubling back on themselves.
+        let loCol = Math.min(sci, gci),
+          hiCol = Math.max(sci, gci);
+        // margin lets the path step through the padded moat around its OWN two nodes (otherwise a node's
+        // own GRID_PAD ring seals its border cells and A* can't leave the source / reach the target)
+        const M = GRID_PAD + Math.max(cw, ch);
+        const inR = (x, y, R) => R && x >= R[0] - M && x <= R[2] + M && y >= R[1] - M && y <= R[3] + M;
+        const pass = (ci, ri) => {
+          if (ci < loCol || ci > hiCol || ri < 0 || ri >= rows) return false;
+          if (!blocked[ri * cols + ci]) return true;
+          const cx = (ci + 0.5) * cw,
+            cy = (ri + 0.5) * ch; // a blocked cell is still usable if it's in the moat around our own nodes
+          return inR(cx, cy, sRect) || inR(cx, cy, tRect);
+        };
+        const start = sri * cols + sci,
+          goal = gri * cols + gci;
+        const g = new Float64Array(N),
+          came = new Int32Array(N);
+        const heap = [];
+        const push = (f, i) => {
+          heap.push([f, i]);
+          let k = heap.length - 1;
+          while (k > 0) {
+            const p = (k - 1) >> 1;
+            if (heap[p][0] <= heap[k][0]) break;
+            [heap[p], heap[k]] = [heap[k], heap[p]];
+            k = p;
+          }
+        };
+        const pop = () => {
+          const top = heap[0],
+            last = heap.pop();
+          if (heap.length) {
+            heap[0] = last;
+            let k = 0;
+            for (;;) {
+              let l = 2 * k + 1,
+                r = 2 * k + 2,
+                m = k;
+              if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+              if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+              if (m === k) break;
+              [heap[m], heap[k]] = [heap[k], heap[m]];
+              k = m;
+            }
+          }
+          return top;
+        };
+        const hEst = (i) => {
+          const dx = Math.abs((i % cols) - gci),
+            dy = Math.abs(((i / cols) | 0) - gri);
+          return dx + dy + (Math.SQRT2 - 2) * Math.min(dx, dy);
+        };
+        const DIRS = [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+          [1, 1],
+          [1, -1],
+          [-1, 1],
+          [-1, -1],
+        ];
+        const search = () => {
+          g.fill(Infinity);
+          came.fill(-1);
+          heap.length = 0;
+          g[start] = 0;
+          push(hEst(start), start);
+          while (heap.length) {
+            const [f, cur] = pop();
+            if (cur === goal) return true;
+            if (f - 1e-6 > g[cur] + hEst(cur)) continue; // stale heap entry
+            const ci = cur % cols,
+              ri = (cur / cols) | 0;
+            const pci = came[cur] >= 0 ? came[cur] % cols : ci,
+              pri = came[cur] >= 0 ? (came[cur] / cols) | 0 : ri;
+            const pdx = Math.sign(ci - pci),
+              pdy = Math.sign(ri - pri);
+            for (const [dx, dy] of DIRS) {
+              const nci = ci + dx,
+                nri = ri + dy;
+              if (!pass(nci, nri)) continue;
+              if (dx && dy && (!pass(ci + dx, ri) || !pass(ci, ri + dy))) continue; // no corner cutting
+              const nidx = nri * cols + nci;
+              const turn = came[cur] >= 0 && (pdx !== dx || pdy !== dy) ? 0.8 : 0; // discourage zig-zags
+              const ng = g[cur] + (dx && dy ? Math.SQRT2 : 1) + turn;
+              if (ng < g[nidx]) {
+                g[nidx] = ng;
+                came[nidx] = cur;
+                push(ng + hEst(nidx), nidx);
+              }
+            }
+          }
+          return false;
+        };
+        let found = search();
+        if (!found) {
+          // No clear path inside the band — relax the horizontal confinement and retry on the full width.
+          // A small backward jog is a better outcome than cutting straight through a node.
+          loCol = 0;
+          hiCol = cols - 1;
+          found = search();
+        }
+        if (!found) return [src, tgt];
+        const cells = [];
+        for (let c = goal; c >= 0; c = came[c]) cells.push(c);
+        cells.reverse();
+        const ctr = (i) => [((i % cols) + 0.5) * cw, (((i / cols) | 0) + 0.5) * ch];
+        const path = cells.map(ctr);
+        // Douglas–Peucker: drop any waypoint within EPS of the line through its neighbours, so long straight
+        // runs collapse to a single cubic (just start+end control points) and only genuine bends keep a
+        // point. EPS stays below the node clearance, so the simplified polyline still hugs the clear path.
+        const EPS = 6;
+        const perp = (p, a, b) => {
+          const dx = b[0] - a[0],
+            dy = b[1] - a[1],
+            L2 = dx * dx + dy * dy;
+          if (!L2) return Math.hypot(p[0] - a[0], p[1] - a[1]);
+          let u = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2;
+          u = u < 0 ? 0 : u > 1 ? 1 : u;
+          return Math.hypot(p[0] - (a[0] + u * dx), p[1] - (a[1] + u * dy));
+        };
+        const rdp = (pl) => {
+          if (pl.length < 3) return pl;
+          let dmax = 0,
+            idx = 0;
+          for (let i = 1; i < pl.length - 1; i++) {
+            const d = perp(pl[i], pl[0], pl[pl.length - 1]);
+            if (d > dmax) {
+              dmax = d;
+              idx = i;
+            }
+          }
+          return dmax > EPS ? rdp(pl.slice(0, idx + 1)).slice(0, -1).concat(rdp(pl.slice(idx))) : [pl[0], pl[pl.length - 1]];
+        };
+        const simp = rdp(path);
+        return [src, ...simp.slice(1, -1), tgt];
+      }
+      let GRID_ROUTING = false; // experimental grid router on/off (toggled above the graph)
+      let GRAPH_LAYOUT = null; // last render's geometry {PADX,COLW,NW,NH,colNodes,nodeRank,W,H,rects,grid}
       let LAYOUT = "planar"; // "planar" | "custom"  (severity layout deprecated)
       let CUSTOM_POS = {}; // node name -> [x,y] in custom mode
       let GRAPH_FILTER = null; // Set of node names to restrict the graph to (subtree focus), or null
       let GRAPH_HIGHLIGHT = null; // Set of node names to spotlight (clicked chain/node); others dimmed
       let LAST_TAP = { node: null, t: 0 }; // module-scoped so it survives the redraw a single tap triggers
-
-      // median-heuristic crossing reduction for a layered DAG (fewer edge crossings ≈ planar)
-      function planarOrder(cols, maxLayer, preds, succ) {
-        const order = new Map();
-        for (let l = 0; l <= maxLayer; l++) order.set(l, (cols.get(l) || []).slice());
-        const idxOf = (l) => {
-          const m = new Map();
-          order.get(l).forEach((n, i) => m.set(n, i));
-          return m;
-        };
-        const med = (xs) => {
-          xs = xs.filter((v) => v >= 0).sort((a, b) => a - b);
-          const n = xs.length;
-          if (!n) return -1;
-          const m = n >> 1;
-          if (n % 2) return xs[m];
-          if (n === 2) return (xs[0] + xs[1]) / 2;
-          const Lo = xs[m - 1] - xs[0],
-            Ro = xs[n - 1] - xs[m];
-          return Lo + Ro === 0 ? (xs[m - 1] + xs[m]) / 2 : (xs[m - 1] * Ro + xs[m] * Lo) / (Lo + Ro);
-        };
-        const reorder = (l, neigh) => {
-          const keyed = order.get(l).map((n, i) => {
-            let k = med(neigh(n));
-            if (k < 0) k = i;
-            return [n, k, i];
-          });
-          keyed.sort((a, b) => (a[1] === b[1] ? a[2] - b[2] : a[1] - b[1]));
-          order.set(
-            l,
-            keyed.map((x) => x[0]),
-          );
-        };
-        for (let it = 0; it < 8; it++) {
-          for (let l = 1; l <= maxLayer; l++) {
-            const prev = idxOf(l - 1);
-            reorder(l, (n) => (preds.get(n) || []).map((p) => prev.get(p)));
-          }
-          for (let l = maxLayer - 1; l >= 0; l--) {
-            const next = idxOf(l + 1);
-            reorder(l, (n) => (succ.get(n) || []).map((s) => next.get(s)));
-          }
-        }
-        return order;
-      }
-
-      // Sugiyama coordinate assignment: pull each node to the barycentre of its
-      // neighbours (aligning pass-throughs / fan-ins), keeping order + min spacing.
-      function assignY(order, maxLayer, preds, succ, ROWH) {
-        const y = new Map();
-        for (let l = 0; l <= maxLayer; l++) order.get(l).forEach((n, i) => y.set(n, i * ROWH));
-        const avg = (vs) => {
-          vs = vs.filter((v) => v != null);
-          return vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : null;
-        };
-        const place = (arr, target) => {
-          for (const n of arr) {
-            const t = target(n);
-            if (t != null) y.set(n, t);
-          }
-          for (let i = 1; i < arr.length; i++) {
-            const need = y.get(arr[i - 1]) + ROWH;
-            if (y.get(arr[i]) < need) y.set(arr[i], need);
-          }
-        };
-        for (let it = 0; it < 14; it++) {
-          for (let l = maxLayer - 1; l >= 0; l--)
-            place(order.get(l), (n) => avg((succ.get(n) || []).map((s) => y.get(s)))); // up sweep (by successors)
-          for (let l = 1; l <= maxLayer; l++)
-            place(order.get(l), (n) => avg((preds.get(n) || []).map((p) => y.get(p)))); // down sweep last (roots settle on preds)
-        }
-        let miny = Infinity;
-        for (const v of y.values()) if (v < miny) miny = v;
-        for (const [k, v] of y) y.set(k, v - miny);
-        return y;
-      }
 
       function graphSvg(chains, limit) {
         if (!chains.length) return "<p class=note>No chains to graph.</p>";
@@ -1535,132 +1777,268 @@
           const s = k.split("");
           if (!keep.has(s[0]) || !keep.has(s[1])) edges.delete(k);
         }
-        const preds = new Map();
-        for (const k of edges.keys()) {
-          const [f, t] = k.split("");
-          pushMap(preds, t, f);
-        }
-        const succ = new Map();
-        for (const [t, fs] of preds) for (const f of fs) pushMap(succ, f, t);
-        const layer = new Map();
-        function L(n, guard) {
-          if (layer.has(n)) return layer.get(n);
-          if (guard.has(n)) return 0;
-          guard.add(n);
-          let m = 0;
-          for (const p of preds.get(n) || []) m = Math.max(m, L(p, guard) + 1);
-          layer.set(n, m);
-          return m;
-        }
-        for (const n of nodes.keys()) L(n, new Set());
-        const cols = new Map();
-        let maxLayer = 0;
-        for (const [n, l] of layer) {
-          pushMap(cols, l, n);
-          if (l > maxLayer) maxLayer = l;
-        }
-        // Route edges that span >1 layer through dummy waypoints: give each such edge a placeholder in
-        // every intermediate column so the ordering/coordinate passes reserve a gap there and the edge
-        // threads between real nodes instead of cutting straight through them.
-        const routes = new Map(); // edge key -> [f, ...dummyIds, t]
-        let dseq = 0;
-        for (const k of [...edges.keys()]) {
-          const [f, t] = k.split("");
-          const lf = layer.get(f),
-            lt = layer.get(t);
-          if (lt - lf <= 1) continue;
-          const chain = [f];
-          let prev = f;
-          for (let l = lf + 1; l < lt; l++) {
-            const d = "@@dummy" + dseq++; // dummy id (cannot collide with a node name)
-            pushMap(cols, l, d);
-            pushMap(preds, d, prev);
-            pushMap(succ, prev, d);
-            chain.push(d);
-            prev = d;
-          }
-          pushMap(preds, t, prev);
-          pushMap(succ, prev, t);
-          const pt = preds.get(t),
-            pi = pt.lastIndexOf(f);
-          if (pi >= 0) pt.splice(pi, 1); // drop the direct f->t link (now via dummies)
-          const sf = succ.get(f),
-            si = sf.lastIndexOf(t);
-          if (si >= 0) sf.splice(si, 1);
-          chain.push(t);
-          routes.set(k, chain);
-        }
+        if (!nodes.size) return "<p class=note>No chains to graph.</p>";
         const NW = GNODE_W,
           NH = GNODE_H,
-          COLW = 232,
-          ROWH = 66,
           PADX = 16,
           PADY = 16;
-        const wof = (id) => (nodes.get(id) ? nodes.get(id).wait : 0); // dummies (not in nodes) sort as 0
-        for (let l = 0; l <= maxLayer; l++) (cols.get(l) || []).sort((a, b) => wof(b) - wof(a)); // init order (by wait)
-        const order = planarOrder(cols, maxLayer, preds, succ);
-        const yy = assignY(order, maxLayer, preds, succ, ROWH);
-        const pos = new Map();
-        for (let l = 0; l <= maxLayer; l++)
-          order.get(l).forEach((n) => pos.set(n, { x: PADX + l * COLW, y: PADY + yy.get(n) }));
-        // Collapse full-width empty vertical bands: disconnected components can be spread far apart
-        // by the barycenter pass, leaving big gaps. Merge occupied y-intervals and pull everything
-        // below any oversized gap upward, keeping one row of breathing space.
+        // Hand-rolled layered (Sugiyama) layout, left→right: downstream on the left, roots on the
+        // right. Longest-path ranking → dummy vertices for edges spanning ranks → median crossing
+        // reduction → barycentre coordinate assignment. Edges spline through their dummy waypoints.
+        const COLW = NW + 74,
+          ROWH = NH + 22;
+        const preds = new Map(),
+          succ = new Map();
+        for (const n of nodes.keys()) {
+          preds.set(n, []);
+          succ.set(n, []);
+        }
+        for (const k of edges.keys()) {
+          const [f, t] = k.split("");
+          succ.get(f).push(t);
+          preds.get(t).push(f);
+        }
+        // rank = longest path from the leaves (the nodes nothing points at); memoised, cycle-guarded.
+        const rank = new Map();
         {
-          const iv = [...pos.values()].map((p) => [p.y, p.y + NH]).sort((a, b) => a[0] - b[0]);
-          const merged = [];
-          for (const [s, e] of iv) {
-            const last = merged[merged.length - 1];
-            if (last && s <= last[1] + 1) last[1] = Math.max(last[1], e);
-            else merged.push([s, e]);
+          const active = new Set();
+          const rk = (n) => {
+            if (rank.has(n)) return rank.get(n);
+            if (active.has(n)) return 0;
+            active.add(n);
+            let r = 0;
+            for (const p of preds.get(n)) r = Math.max(r, rk(p) + 1);
+            active.delete(n);
+            rank.set(n, r);
+            return r;
+          };
+          for (const n of nodes.keys()) rk(n);
+        }
+        let maxRank = 0;
+        for (const r of rank.values()) if (r > maxRank) maxRank = r;
+        // Dummy vertices so every drawn segment joins adjacent ranks only. vnode: id -> {rank, up, down}
+        // where up = lower-rank neighbours, down = higher-rank neighbours. Real nodes keep their name.
+        const vnode = new Map();
+        for (const n of nodes.keys()) vnode.set(n, { rank: rank.get(n), up: [], down: [] });
+        const routes = new Map(); // edge key -> [dummy id, ...] from source toward target
+        for (const k of edges.keys()) {
+          const [f, t] = k.split("");
+          const chain = [];
+          let prev = f;
+          for (let r = rank.get(f) + 1; r < rank.get(t); r++) {
+            const id = "@@d:" + k + ":" + r;
+            vnode.set(id, { rank: r, up: [], down: [] });
+            vnode.get(prev).down.push(id);
+            vnode.get(id).up.push(prev);
+            chain.push(id);
+            prev = id;
           }
+          vnode.get(prev).down.push(t);
+          vnode.get(t).up.push(prev);
+          routes.set(k, chain);
+        }
+        // Columns per rank; initial order = insertion order.
+        const cols = [];
+        for (let r = 0; r <= maxRank; r++) cols.push([]);
+        for (const [id, v] of vnode) cols[v.rank].push(id);
+        const order = new Map();
+        const reindex = () => {
+          for (const col of cols) col.forEach((id, i) => order.set(id, i));
+        };
+        reindex();
+        const median = (a) => {
+          if (!a.length) return -1;
+          a.sort((x, y) => x - y);
+          const m = a.length >> 1;
+          return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+        };
+        const sortCol = (r, dir) => {
+          const col = cols[r];
+          const meas = new Map();
+          col.forEach((id, i) => {
+            const nb = vnode
+              .get(id)
+              [dir].map((x) => order.get(x))
+              .filter((x) => x >= 0);
+            const m = median(nb);
+            meas.set(id, m < 0 ? i : m); // no neighbours → stay put
+          });
+          col.sort((a, b) => meas.get(a) - meas.get(b));
+          col.forEach((id, i) => order.set(id, i));
+        };
+        // Median-heuristic crossing reduction: alternate down/up sweeps.
+        for (let it = 0; it < 12; it++) {
+          if (it % 2 === 0) for (let r = 1; r <= maxRank; r++) sortCol(r, "up");
+          else for (let r = maxRank - 1; r >= 0; r--) sortCol(r, "down");
+        }
+        // Coordinate assignment: put each node at its neighbour barycentre subject to the fixed order
+        // and a minimum row gap, choosing the assignment with least displacement (isotonic regression
+        // via pool-adjacent-violators). This has no up/down bias — a component can't drift and leave a
+        // dead vertical band the way a one-directional push would.
+        const yc = new Map();
+        for (const col of cols) col.forEach((id, i) => yc.set(id, i * ROWH));
+        const relax = (r, dir) => {
+          const col = cols[r],
+            n = col.length;
+          if (!n) return;
+          const des = col.map((id) => {
+            const nb = vnode.get(id)[dir].map((x) => yc.get(x));
+            return nb.length ? nb.reduce((a, b) => a + b, 0) / nb.length : yc.get(id);
+          });
+          // Subtract the mandatory staircase (i * ROWH) so the min-gap constraint becomes "non-decreasing",
+          // then pool adjacent violators to get the closest non-decreasing sequence.
+          const mean = [],
+            sum = [],
+            cnt = [];
+          for (let i = 0; i < n; i++) {
+            let s = des[i] - i * ROWH,
+              c = 1;
+            while (mean.length && mean[mean.length - 1] >= s / c) {
+              s += sum.pop();
+              c += cnt.pop();
+              mean.pop();
+            }
+            mean.push(s / c);
+            sum.push(s);
+            cnt.push(c);
+          }
+          let idx = 0;
+          for (let b = 0; b < mean.length; b++) for (let j = 0; j < cnt[b]; j++, idx++) yc.set(col[idx], mean[b] + idx * ROWH);
+        };
+        for (let it = 0; it < 16; it++) {
+          if (it % 2 === 0) for (let r = 1; r <= maxRank; r++) relax(r, "up");
+          else for (let r = maxRank - 1; r >= 0; r--) relax(r, "down");
+        }
+        let miny = Infinity;
+        for (const v of yc.values()) if (v < miny) miny = v;
+        if (miny !== Infinity) for (const [id, v] of yc) yc.set(id, v - miny);
+        // Compaction: collapse dead horizontal bands (no node or waypoint anywhere across the width) down
+        // to a single row gap. Disconnected sub-trees have no vertical coupling, so barycentring lets them
+        // float apart and leave a large empty band; this pulls everything below each band uniformly up,
+        // which preserves order, gaps and crossings (every edge over the band just gets a little steeper).
+        {
+          const iv = [...yc.values()].map((y) => [y, y + NH]).sort((a, b) => a[0] - b[0]);
           const cuts = [];
-          for (let i = 1; i < merged.length; i++) {
-            const gap = merged[i][0] - merged[i - 1][1];
-            if (gap > ROWH) cuts.push([merged[i][0], gap - ROWH]); // keep one row of gap
+          let shift = 0,
+            prevEnd = iv.length ? iv[0][1] : 0;
+          for (const [a, b] of iv) {
+            if (a - prevEnd > ROWH) {
+              shift += a - prevEnd - ROWH;
+              cuts.push([a, shift]);
+            }
+            if (b > prevEnd) prevEnd = b;
           }
           if (cuts.length)
-            for (const p of pos.values()) {
-              let shift = 0;
-              for (const [from, amt] of cuts) if (p.y >= from) shift += amt;
-              p.y -= shift;
+            for (const [id, y] of yc) {
+              let sh = 0;
+              for (const [thr, s] of cuts) if (y >= thr) sh = s;
+              yc.set(id, y - sh);
             }
         }
-        if (LAYOUT === "custom") {
-          for (const n of nodes.keys()) {
-            const c = CUSTOM_POS[n];
-            if (c) pos.set(n, { x: c[0], y: c[1] });
+        const colX = (r) => PADX + r * COLW;
+        // Real-node top-left positions; dummy centres for edge routing.
+        const posDraw = new Map();
+        for (const n of nodes.keys()) posDraw.set(n, { x: colX(rank.get(n)), y: PADY + yc.get(n) });
+        // Each dummy is a clear horizontal slot spanning its whole column (xl → xr at centre-y). Routing
+        // an edge left-to-right across that slot keeps the in-column travel horizontal and clear; all the
+        // vertical movement then happens in the empty channels between columns.
+        const dpos = new Map();
+        for (const chain of routes.values())
+          for (const id of chain) {
+            const v = vnode.get(id);
+            dpos.set(id, { xl: colX(v.rank), xr: colX(v.rank) + NW, y: PADY + yc.get(id) + NH / 2 });
           }
+        // A node the user has dragged keeps its manual position; everything else stays where the layout
+        // put it. (Applied unconditionally so a re-render matches exactly what drag drew — no jump.)
+        for (const n of nodes.keys()) {
+          const c = CUSTOM_POS[n];
+          if (c) posDraw.set(n, { x: c[0], y: c[1] });
         }
+        // Bounds first — the experimental grid needs them.
         let W = 0,
           H = 0;
-        for (const p of pos.values()) {
+        for (const p of posDraw.values()) {
           if (p.x + NW > W) W = p.x + NW;
           if (p.y + NH > H) H = p.y + NH;
         }
         W += PADX;
         H += PADY;
+        // Geometry the drag handler needs to reflow edges live: each column's real-node y-intervals, every
+        // node's rank, the node rectangles, and (only when the experimental router is on) a blocked-cell
+        // grid. Rebuilt every render so it always reflects the current node positions.
+        const colNodes = {},
+          nodeRank = {},
+          rectByName = {},
+          rects = [];
+        for (const n of nodes.keys()) {
+          const r = rank.get(n),
+            p = posDraw.get(n),
+            rc = [p.x, p.y, p.x + NW, p.y + NH];
+          nodeRank[n] = r;
+          rectByName[n] = rc;
+          rects.push(rc);
+          (colNodes[r] || (colNodes[r] = [])).push([p.y, p.y + NH]);
+        }
+        for (const r in colNodes) colNodes[r].sort((x, y) => x[0] - y[0]);
+        const L = { PADX, COLW, NW, NH, colNodes, nodeRank, W, H, rects, rectByName };
+        const dragged = Object.keys(CUSTOM_POS);
+        // The grid backs the experimental router, and also lets the planar router re-route around nodes the
+        // user has dragged — the column router assumes nodes sit in their ranks, which dragging breaks.
+        L.grid = GRID_ROUTING || dragged.length ? buildGrid(rects, W, H) : null;
+        GRAPH_LAYOUT = L;
         let s = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role=img aria-label="Backpressure chain graph">`;
-        // no arrowheads: direction is implicit (downstream on the left, roots on the right)
+        // Position-aware A* routing (experimental router, and any planar edge a drag has disturbed): connect
+        // from the facing sides and smooth with direction-aware endpoints.
+        const gridEdge = (f, t) => {
+          const rf = L.rectByName[f],
+            rt = L.rectByName[t];
+          const dir = (rt[0] + rt[2]) / 2 >= (rf[0] + rf[2]) / 2 ? 1 : -1;
+          const gs = dir > 0 ? [rf[2], (rf[1] + rf[3]) / 2] : [rf[0], (rf[1] + rf[3]) / 2];
+          const gt = dir > 0 ? [rt[0], (rt[1] + rt[3]) / 2] : [rt[2], (rt[1] + rt[3]) / 2];
+          return smoothPath(gridRoute(gs, gt, rf, rt, L.grid), dir);
+        };
+        const hitsDragged = (pts) => {
+          for (const dn of dragged) {
+            const r = L.rectByName[dn];
+            for (let i = 1; i < pts.length; i++)
+              for (let u = 0; u <= 24; u++) {
+                const x = pts[i - 1][0] + ((pts[i][0] - pts[i - 1][0]) * u) / 24,
+                  y = pts[i - 1][1] + ((pts[i][1] - pts[i - 1][1]) * u) / 24;
+                if (x > r[0] - 2 && x < r[2] + 2 && y > r[1] - 2 && y < r[3] + 2) return true;
+              }
+          }
+          return false;
+        };
+        // Edges: curve from the source's right edge, horizontally across each dummy's clear column slot, to
+        // the target's left edge — vertical moves land in the channels, so the curve snakes between nodes.
         for (const [k, w] of edges) {
           const [f, t] = k.split("");
-          if (!pos.get(f) || !pos.get(t)) continue;
-          // Dummy-waypoint routing only applies to the auto (planar) layout. In custom mode the user
-          // has placed nodes freely, so route edges directly between endpoints (dummies are meaningless).
-          const route = LAYOUT === "custom" ? [f, t] : routes.get(k) || [f, t];
-          const pts = route.map((id, i) => {
-            const p = pos.get(id);
-            if (i === 0) return [p.x + NW, p.y + NH / 2]; // source right edge
-            if (i === route.length - 1) return [p.x, p.y + NH / 2]; // target left edge
-            return [p.x + NW / 2, p.y + NH / 2]; // dummy waypoint: column centre (a reserved gap row)
-          });
+          if (!posDraw.get(f) || !posDraw.get(t)) continue;
+          const a = posDraw.get(f),
+            b = posDraw.get(t);
+          const src = [a.x + NW, a.y + NH / 2],
+            tgt = [b.x, b.y + NH / 2];
+          let dstr;
+          if (GRID_ROUTING || (dragged.length && (CUSTOM_POS[f] || CUSTOM_POS[t]))) {
+            // experimental router, or a planar edge whose own endpoint was dragged — route position-aware
+            dstr = gridEdge(f, t);
+          } else {
+            const via = [];
+            for (const id of routes.get(k) || []) {
+              const d = dpos.get(id);
+              if (d) via.push([d.xl, d.y], [d.xr, d.y]);
+            }
+            const pts = [src, ...via, tgt];
+            // if a dragged node has landed on this otherwise-untouched edge, re-route around the obstacles
+            dstr = dragged.length && hitsDragged(pts) ? gridEdge(f, t) : edgePath(pts);
+          }
           const t01 = Math.min(w / EDGE_MAX_S, 1); // colour/width on an ABSOLUTE 0..10s scale, not relative to max
           const sw = (1.2 + 5 * t01).toFixed(1);
           const eop = GRAPH_HIGHLIGHT && !(GRAPH_HIGHLIGHT.has(f) && GRAPH_HIGHLIGHT.has(t)) ? 0.1 : 0.85;
-          s += `<path class=gedge data-from="${esc(f)}" data-to="${esc(t)}" d="${edgePath(pts)}" fill=none stroke="${edgeColor(t01)}" stroke-opacity="${eop}" stroke-width=${sw}><title>${esc(f)} → ${esc(t)}: ${w.toFixed(2)}s</title></path>`;
+          s += `<path class=gedge data-from="${esc(f)}" data-to="${esc(t)}" d="${dstr}" fill=none stroke="${edgeColor(t01)}" stroke-opacity="${eop}" stroke-width=${sw}><title>${esc(f)} → ${esc(t)}: ${w.toFixed(2)}s</title></path>`;
         }
         for (const [n, nd] of nodes) {
-          const p = pos.get(n),
+          const p = posDraw.get(n),
             hex = catHex(nd.cat);
           const disp = n.length > 24 ? n.slice(0, 23) + "…" : n;
           const hlOn = GRAPH_HIGHLIGHT && GRAPH_HIGHLIGHT.has(n); // spotlighted (in the selected chain)
@@ -1753,13 +2131,14 @@
             "A graph of the chains with the longest waits. Each <b>node</b> is a pipeline; an <b>edge</b> connects a downstream pipeline to the upstream one it awaits — downstream on the left, roots on the right. An edge’s <b>thickness and colour</b> show the wait time on a fixed scale (0s cool/thin → 10s+ red/thick), so a healthy graph stays cool. Root nodes on the right are where each chain bottoms out, coloured by what they await; <b>fan-in</b> onto one node marks a shared upstream. Controls: <b>drag</b> a node to move it; <b>click</b> a node to highlight its influence (everything up- and downstream of it); <b>double-click</b> a node to filter the graph to just its connected component; click the empty background to clear a highlight. Hover a node/edge for exact values.",
           ),
         );
-        if (GRAPH_FILTER || GRAPH_HIGHLIGHT) {
-          out.push(
-            "<div class=graphbar><button id=gfilterclear>" +
-              (GRAPH_FILTER ? "show all nodes" : "clear highlight") +
-              "</button></div>",
-          );
-        }
+        out.push(
+          "<div class=graphbar>" +
+            `<label class=gtoggle><input type=checkbox id=gridtoggle${GRID_ROUTING ? " checked" : ""}> experimental grid routing</label>` +
+            (GRAPH_FILTER || GRAPH_HIGHLIGHT
+              ? "<button id=gfilterclear>" + (GRAPH_FILTER ? "show all nodes" : "clear highlight") + "</button>"
+              : "") +
+            "</div>",
+        );
         out.push("<div class=graphwrap>" + graphSvg(data.chains, effShown("graph", data.chains.length)) + "</div>");
         out.push(moreBtn("graph", data.chains.length));
         out.push(
@@ -2314,15 +2693,37 @@
           p.y = e.clientY;
           return m ? p.matrixTransform(m.inverse()) : { x: e.clientX, y: e.clientY };
         };
-        // Dragging always happens in custom layout, where edges route directly between endpoints (matching
-        // how graphSvg draws them in custom mode) — so there's no routing switch between drag and release.
+        // Rebuild the grid occupancy from the live node positions (experimental router only), so the
+        // dragged node stops being an obstacle at its old spot and becomes one at its new spot.
+        const rebuildGrid = () => {
+          if (!GRAPH_LAYOUT) return;
+          const rects = [];
+          svg.querySelectorAll(".gnode").forEach((g) => {
+            const x = +g.dataset.x,
+              y = +g.dataset.y;
+            rects.push([x, y, x + GNODE_W, y + GNODE_H]);
+          });
+          GRAPH_LAYOUT.grid = buildGrid(rects, GRAPH_LAYOUT.W, GRAPH_LAYOUT.H);
+        };
+        // Dragging recomputes the edge with the SAME router the render uses, from the live endpoints — so
+        // the waypoints reflow around the nodes as you drag, and dropping causes no jump.
+        // A drag always routes the moved node's edges position-aware (grid A*) — in BOTH modes — because
+        // the column router can't dodge a node dragged out of its rank. Same call the re-render uses.
         const updEdge = (ed) => {
           const a = nodeEls[ed.dataset.from],
             b = nodeEls[ed.dataset.to];
-          if (!a || !b) return;
-          const p0 = [+a.dataset.x + GNODE_W, +a.dataset.y + GNODE_H / 2];
-          const p1 = [+b.dataset.x, +b.dataset.y + GNODE_H / 2];
-          ed.setAttribute("d", edgePath([p0, p1]));
+          if (!a || !b || !GRAPH_LAYOUT || !GRAPH_LAYOUT.grid) return;
+          const L = GRAPH_LAYOUT;
+          const ax = +a.dataset.x,
+            ay = +a.dataset.y,
+            bx = +b.dataset.x,
+            by = +b.dataset.y;
+          const sRect = [ax, ay, ax + GNODE_W, ay + GNODE_H],
+            tRect = [bx, by, bx + GNODE_W, by + GNODE_H];
+          const dir = bx + GNODE_W / 2 >= ax + GNODE_W / 2 ? 1 : -1;
+          const gs = dir > 0 ? [ax + GNODE_W, ay + GNODE_H / 2] : [ax, ay + GNODE_H / 2];
+          const gt = dir > 0 ? [bx, by + GNODE_H / 2] : [bx + GNODE_W, by + GNODE_H / 2];
+          ed.setAttribute("d", smoothPath(gridRoute(gs, gt, sRect, tRect, L.grid), dir));
         };
         // focus a node's connected subtree (component) via BFS, then re-layout
         // We can't rely on the native "dblclick" event: pointerdown calls preventDefault + setPointerCapture
@@ -2331,7 +2732,13 @@
         let drag = null;
         svg.addEventListener("pointerdown", (e) => {
           const g = e.target.closest && e.target.closest(".gnode");
-          if (!g) return;
+          if (!g) {
+            if (GRAPH_HIGHLIGHT) {
+              GRAPH_HIGHLIGHT = null; // press on empty background -> clear highlight
+              draw();
+            }
+            return;
+          }
           e.preventDefault();
           const s = toSvg(e);
           drag = { g, sx: s.x, sy: s.y, ox: +g.dataset.x, oy: +g.dataset.y, id: e.pointerId };
@@ -2344,14 +2751,8 @@
           if (!drag) return;
           const s = toSvg(e);
           if (!drag.moved) {
-            drag.moved = true; // first movement -> switch to Custom, snapshot current layout
-            if (LAYOUT !== "custom") {
-              CUSTOM_POS = {};
-              svg.querySelectorAll(".gnode").forEach((n) => {
-                CUSTOM_POS[n.dataset.node] = [+n.dataset.x, +n.dataset.y];
-              });
-              LAYOUT = "custom";
-            }
+            if (Math.hypot(s.x - drag.sx, s.y - drag.sy) < 4) return; // ignore click jitter (don't start a drag)
+            drag.moved = true; // real movement -> this node gets a manual position; the rest of the layout stays
           }
           const nx = drag.ox + (s.x - drag.sx),
             ny = drag.oy + (s.y - drag.sy);
@@ -2360,6 +2761,7 @@
           drag.g.setAttribute("transform", `translate(${nx},${ny})`);
           CUSTOM_POS[drag.g.dataset.node] = [nx, ny];
           const nm = drag.g.dataset.node;
+          rebuildGrid(); // refresh obstacle grid from live positions before re-routing this node's edges
           for (const ed of edges) if (ed.dataset.from === nm || ed.dataset.to === nm) updEdge(ed);
         });
         const finish = (isUp) => {
@@ -2387,14 +2789,6 @@
         };
         svg.addEventListener("pointerup", () => finish(true));
         svg.addEventListener("pointercancel", () => finish(false));
-        // click on empty graph background -> clear any highlight
-        svg.addEventListener("click", (e) => {
-          if (e.target.closest && e.target.closest(".gnode")) return; // node taps handled above
-          if (GRAPH_HIGHLIGHT) {
-            GRAPH_HIGHLIGHT = null;
-            draw();
-          }
-        });
       }
       function recompute() {
         if (!STATE) return;
@@ -2580,6 +2974,13 @@
         if (el) hideRootPop();
       });
 
+      // experimental grid-routing toggle above the graph
+      $("body").addEventListener("change", (e) => {
+        if (e.target && e.target.id === "gridtoggle") {
+          GRID_ROUTING = e.target.checked;
+          draw();
+        }
+      });
       // report controls
       $("body").addEventListener("click", (e) => {
         if (!e.target.closest) return;
