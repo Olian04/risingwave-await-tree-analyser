@@ -955,12 +955,15 @@
         UpstreamSinkUnion: "fa-code-merge",
         input: "fa-arrow-right-to-bracket",
       };
-      // Friendly label per category — the SAME wording the graph legend uses, so badges read consistently.
-      const CAT_LABEL = {
-        wait_pending_fetch_block: "storage fetch",
-        fetch_meta: "metadata fetch",
-        "Wait For New Buffer Item": "starved sink",
-        input: "waiting on input",
+      // Curated friendly names for categories whose raw span name doesn't prettify meaningfully. Every other
+      // name is auto-formatted by prettify() into Title Case With Spaces. The raw span name is never shown as
+      // a label — it lives in the (i) hover on table rows and in the graph node's hover tooltip.
+      const FRIENDLY = {
+        wait_pending_fetch_block: "Storage Fetch",
+        fetch_meta: "Metadata Fetch",
+        "Wait For New Buffer Item": "Starved Sink",
+        input: "Waiting On Input",
+        UpstreamSinkUnion: "Upstream Union", // "Upstream Sink Union" overflows the graph node — kept short
       };
       // Reader-facing description per root-await category, shown in the (i) popover on each root row.
       // Single source of truth for what an await point / root await means. Shared by the "Await roots"
@@ -993,7 +996,7 @@
           "Reading a data block from the state store — a cache miss fetching from object storage (S3).",
         wait_epoch: "Waiting for the state store to make a committed epoch readable.",
         fetch_meta:
-          "Fetching table metadata (the Hummock version / SST object metadata) before reading rows — a catalog/metadata lookup, distinct from fetching the data blocks themselves.",
+          "Fetching table metadata (the Hummock version / SST object metadata) before reading rows — a catalogue/metadata lookup, distinct from fetching the data blocks themselves.",
         may_exist: "Checking the state store for a key (bloom-filter / block lookup).",
         iter: "Scanning a range from the state store (object storage / cache).",
         get: "Point-looking-up a key in the state store (object storage / cache).",
@@ -1012,7 +1015,7 @@
         GroupTopN: "Inside a per-group Top-N (ranking within each group).",
         TopN: "Inside a Top-N (global ranking).",
         AppendOnlyTopN: "Inside an append-only Top-N.",
-        Materialize: "Writing results into the materialized-view / table state.",
+        Materialize: "Writing results into the materialised view / table state.",
         Sink: "Handing rows to the sink connector.",
         Project: "Evaluating projection expressions.",
         Filter: "Evaluating a filter predicate.",
@@ -1023,7 +1026,7 @@
         OverWindow: "Inside an over-window (window-function) operator.",
         EowcOverWindow: "Inside an emit-on-window-close over-window operator.",
         WatermarkFilter: "Dropping rows behind the current watermark.",
-        StreamScan: "Backfilling a materialized view / table from its historical snapshot.",
+        StreamScan: "Backfilling a materialised view / table from its historical snapshot.",
         Backfill: "Backfilling historical rows before switching to the live stream.",
         Chain: "Backfilling from an upstream table/MV, then chaining onto its live stream.",
         Dedup: "De-duplicating rows against stored keys.",
@@ -1050,9 +1053,10 @@
       }
       // the (i) icon markup used in tables; hovering it shows the description in the shared popover
       function infoIcon(label) {
+        const base = label.replace(/ \(idle\)$/, ""); // raw RisingWave span name — kept visible in the tooltip
         const desc = describeAwait(label);
         return desc
-          ? ` <span class=rootinfo tabindex=0 role=button aria-label="What “${esc(label)}” means" data-desc="${esc(desc)}"><i class="fa-solid fa-circle-info"></i></span>`
+          ? ` <span class=rootinfo tabindex=0 role=button aria-label="What “${esc(label)}” means" data-desc="${esc(base + " — " + desc)}"><i class="fa-solid fa-circle-info"></i></span>`
           : "";
       }
 
@@ -1432,19 +1436,53 @@
         );
       }
       function badge(cat) {
-        const base = cat.replace(/ \(idle\)$/, ""),
-          idle = base !== cat;
+        const base = cat.replace(/ \(idle\)$/, "");
         const ic = CAT_ICON[base] ? `<i class="fa-solid ${CAT_ICON[base]}"></i> ` : "";
-        const label = (CAT_LABEL[base] || base) + (idle ? " (idle)" : "");
-        return `<span class="badge b-${CAT_COLOUR[base] || "gray"}">${ic}${esc(label)}</span>`;
+        return `<span class="badge b-${CAT_COLOUR[base] || "gray"}">${ic}${esc(friendlyLabel(cat))}</span>`;
       }
       function nf(n) {
         return n.toLocaleString("en-US");
       }
+      // Format a raw span name into a friendly Title Case label with spaces: both snake_case and camelCase
+      // become spaced words (wait_pending_fetch_block → "Wait Pending Fetch Block", UpstreamSinkUnion →
+      // "Upstream Sink Union"). Curated FRIENDLY entries take precedence for names that don't prettify well.
+      function prettify(name) {
+        return name
+          .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+          .replace(/_/g, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .split(" ")
+          .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+          .join(" ");
+      }
+      // Friendly display name for a category/await label — the SAME name the graph legend and badges use, so
+      // every surface names a category identically. The raw span name stays available in the (i) hover.
+      function friendlyLabel(label) {
+        const idle = / \(idle\)$/.test(label);
+        const base = label.replace(/ \(idle\)$/, "");
+        return (FRIENDLY[base] || prettify(base)) + (idle ? " (idle)" : "");
+      }
+      // The graph node subtitle ("<friendly> · <wait>s") has a hard pixel width (GNODE_W). Curated names are
+      // sized to fit, but an actor's deepest await can be any operator, which may prettify long — so drop
+      // trailing words (then ellipsis) until it fits. The full name is always in the node's hover tooltip.
+      function nodeCatText(cat, waitStr) {
+        const suffix = " · " + waitStr;
+        const MAX = 26; // conservative char budget: measured to stay within GNODE_W across wait values
+        let name = friendlyLabel(cat);
+        if (name.length + suffix.length > MAX) {
+          const words = name.split(" ");
+          while (words.length > 1 && words.join(" ").length + suffix.length > MAX) words.pop();
+          name = words.join(" ");
+          const nb = MAX - suffix.length;
+          if (name.length > nb) name = name.slice(0, Math.max(1, nb - 1)) + "…";
+        }
+        return name + suffix;
+      }
       function barRow(label, count, total, withInfo) {
         const pct = total ? (count / total) * 100 : 0;
         return (
-          `<tr><td>${esc(label)}${withInfo ? infoIcon(label) : ""}</td><td class=num>${nf(count)}</td>` +
+          `<tr><td>${esc(friendlyLabel(label))}${withInfo ? infoIcon(label) : ""}</td><td class=num>${nf(count)}</td>` +
           `<td style="width:55%"><div class=barcell><span style="width:${pct.toFixed(1)}%"></span>` +
           `<em>${pct.toFixed(1)}%</em></div></td></tr>`
         );
@@ -1894,7 +1932,7 @@
             `<title>${esc(n)} — ${esc(nd.cat)} · ${nd.wait.toFixed(2)}s</title>` +
             `<rect x="0" y="0" width="${NW}" height="${NH}" rx="8" stroke-opacity="0.75" stroke-width="1" />` +
             `<text class=nt x=11 y=18 font-size=12>${esc(disp)}</text>` +
-            `<text class=ns x=11 y=34 font-size=11>${esc(nd.cat)} · ${nd.wait.toFixed(2)}s</text>` +
+            `<text class=ns x=11 y=34 font-size=11>${esc(nodeCatText(nd.cat, nd.wait.toFixed(2) + "s"))}</text>` +
             `</g>`;
         }
         s += "</svg>";
@@ -1909,11 +1947,11 @@
         const h2 = (ic, t) => `<h2><i class="fa-solid ${ic}"></i> ${t}</h2>`;
         const cards = [
           ["Actors", nf(total), "fa-diagram-project"],
-          ["True-wait median", s.median.toFixed(2) + "s", "fa-clock"],
+          ["Epoch Wait Median", s.median.toFixed(2) + "s", "fa-clock"],
           ["p99", s.p99.toFixed(2) + "s", "fa-gauge-high"],
-          ["max", s.max.toFixed(2) + "s", "fa-stopwatch"],
+          ["Max", s.max.toFixed(2) + "s", "fa-stopwatch"],
           ["Stuck ≥ 10s", nf(data.stuck_count), "fa-triangle-exclamation"],
-          ["Actors w/ idle span", nf(data.idle.with_idle), "fa-hourglass-half"],
+          ["Actors With Idle Span", nf(data.idle.with_idle), "fa-hourglass-half"],
         ];
         out.push(
           "<div class=cards>" +
@@ -1932,24 +1970,24 @@
           info(
             "Each actor is followed upstream to the thing it ultimately waits on — its <b>root</b>: " +
               "<b>Source</b> = waiting on ingestion (new data from Kafka/CDC/etc.); " +
-              "<b>wait_pending_fetch_block</b> = reading state from storage (S3 / cache); " +
-              "<b>receive_barrier</b> = waiting for the next checkpoint barrier, usually normal; " +
-              "<b>Wait For New Buffer Item</b> = a sink with nothing to send; " +
-              "<b>UpstreamSinkUnion</b> = reading a base table fed by an upstream source or sink; " +
-              "<b>input</b> = waiting on data from an upstream actor. " +
+              "<b>Storage Fetch</b> = reading state from storage (S3 / cache); " +
+              "<b>Receive Barrier</b> = waiting for the next checkpoint barrier, usually normal; " +
+              "<b>Starved Sink</b> = a sink with nothing to send; " +
+              "<b>Upstream Union</b> = reading a base table fed by an upstream source or sink; " +
+              "<b>Waiting On Input</b> = waiting on data from an upstream actor. " +
               "A root may be marked “<b>(idle)</b>” — a long-running operation waiting for new work, e.g. an idle source. That’s expected and is <b>not</b> backpressure.",
           ),
         );
         out.push(
-          '<div class=tscroll><table><thead><tr><th>Root await</th><th class=num>Actors</th><th>Share</th></tr></thead><tbody>' +
+          '<div class=tscroll><table><thead><tr><th>Await Root</th><th class=num>Actors</th><th>Share</th></tr></thead><tbody>' +
             data.root_split.map(([l, c]) => barRow(l, c, total, true)).join("") +
             "</tbody></table></div>",
         );
 
-        out.push(h2("fa-hourglass-half", "Primary await-point (all actors)"));
+        out.push(h2("fa-hourglass-half", "Primary await point (all actors)"));
         out.push(
           info(
-            "What actors are <b>directly</b> blocked on right now (one hop — not traced to root). <b>RemoteInput/LocalInput</b> = waiting for data from an upstream actor (normal idling or backpressure); <b>Source</b> = ingestion; <b>Wait For New Buffer Item</b> = a starved sink; <b>receive_barrier</b> = awaiting the barrier. Lots of input-waiting is expected — the roots section above is what tells you the underlying cause.",
+            "What actors are <b>directly</b> blocked on right now (one hop — not traced to root). <b>Remote Input / Local Input</b> = waiting for data from an upstream actor (normal idling or backpressure); <b>Source</b> = ingestion; <b>Starved Sink</b> = a sink with nothing new to send; <b>Receive Barrier</b> = awaiting the barrier. Lots of input-waiting is expected — the roots section above is what tells you the underlying cause.",
           ),
         );
         out.push(
@@ -1957,10 +1995,10 @@
             "awaits",
             [
               {
-                label: "Await point",
+                label: "Await Point",
                 type: "text",
-                get: (r) => r[0],
-                cell: (r) => `<td>${esc(r[0])}${infoIcon(r[0])}</td>`,
+                get: (r) => friendlyLabel(r[0]),
+                cell: (r) => `<td>${esc(friendlyLabel(r[0]))}${infoIcon(r[0])}</td>`,
               },
               { label: "Actors", type: "num", get: (r) => r[1], cell: (r) => `<td class=num>${nf(r[1])}</td>` },
               {
@@ -1993,12 +2031,12 @@
         out.push(
           "<div class=glegend>" +
             '<i><span class="sw c-amber"></span><i class="fa-solid fa-satellite-dish"></i> Source</i>' +
-            '<i><span class="sw c-purple"></span><i class="fa-solid fa-code-merge"></i> UpstreamSinkUnion</i>' +
-            '<i><span class="sw c-blue"></span><i class="fa-solid fa-flag-checkered"></i> receive_barrier</i>' +
-            '<i><span class="sw c-red"></span><i class="fa-solid fa-database"></i> storage fetch</i>' +
-            '<i><span class="sw c-green"></span><i class="fa-solid fa-table-list"></i> metadata fetch</i>' +
-            '<i><span class="sw c-teal"></span><i class="fa-solid fa-faucet-drip"></i> starved sink</i>' +
-            '<i><span class="sw c-gray"></span><i class="fa-solid fa-arrow-right-to-bracket"></i> waiting on input</i>' +
+            '<i><span class="sw c-purple"></span><i class="fa-solid fa-code-merge"></i> Upstream Union</i>' +
+            '<i><span class="sw c-blue"></span><i class="fa-solid fa-flag-checkered"></i> Receive Barrier</i>' +
+            '<i><span class="sw c-red"></span><i class="fa-solid fa-database"></i> Storage Fetch</i>' +
+            '<i><span class="sw c-green"></span><i class="fa-solid fa-table-list"></i> Metadata Fetch</i>' +
+            '<i><span class="sw c-teal"></span><i class="fa-solid fa-faucet-drip"></i> Starved Sink</i>' +
+            '<i><span class="sw c-gray"></span><i class="fa-solid fa-arrow-right-to-bracket"></i> Waiting On Input</i>' +
             '<i style="margin-left:auto"><span class="sw grad"></span>edge = wait ' +
             (EDGE_SCALE === "rel"
               ? `(0s → ${Math.max(0, ...data.chains.flatMap((c) => c.hops.map((h) => h[1]))).toFixed(1)}s, relative)`
@@ -2009,7 +2047,7 @@
         out.push(h2("fa-code-branch", "Worst chain per pipeline (downstream → upstream root)"));
         out.push(
           info(
-            "For each of the slowest pipelines, its single most-stuck path traced to the root, with the wait at each hop. Read top→bottom: the first line is the slow pipeline; indented lines are successively further upstream. The badge shows what each hop is blocked on, and where the chain bottoms out is the cause — <b>Source/UpstreamSinkUnion</b> = ingestion, <b>wait_pending_fetch_block</b> = storage. When every wait is small and similar, the cluster is healthy and no single path is meaningful — read the roots table above for the overall picture. <b>Click a chain</b> to highlight its nodes in the graph above.",
+            "For each of the slowest pipelines, its single most-stuck path traced to the root, with the wait at each hop. Read top→bottom: the first line is the slow pipeline; indented lines are successively further upstream. The badge shows what each hop is blocked on, and where the chain bottoms out is the cause — <b>Source / Upstream Union</b> = ingestion, <b>Storage Fetch</b> = storage. When every wait is small and similar, the cluster is healthy and no single path is meaningful — read the roots table above for the overall picture. <b>Click a chain</b> to highlight its nodes in the graph above.",
           ),
         );
         out.push('<div class=chainscroll>');
@@ -2031,7 +2069,7 @@
         }
         out.push("</div>");
 
-        out.push(h2("fa-chart-column", "Epoch-wait distribution"));
+        out.push(h2("fa-chart-column", "Epoch wait distribution"));
         out.push(
           info(
             "How long actors have been waiting in their current step. At rest this is bounded by the checkpoint interval (~1s), so a healthy cluster sits in the <b>0–1s</b> buckets. Actors in the <b>10s+</b> buckets are genuinely frozen or heavily backpressured. If everything is ≤~1–2s, the cluster was healthy when the dump was taken — to catch an incident, capture again while latency is climbing.",
@@ -2043,10 +2081,10 @@
             "</tbody></table></div>",
         );
 
-        out.push(h2("fa-timeline", "Pipelines by max epoch-wait"));
+        out.push(h2("fa-timeline", "Pipelines by max epoch wait"));
         out.push(
           info(
-            "Each streaming job (materialized view, index, or sink), ranked by its slowest actor. A high <b>max</b> with a low <b>median</b> means one straggler actor — data skew or a hot key; a high <b>median</b> means the whole job is slow. <b>actors</b> is that job's parallelism.",
+            "Each pipeline (a materialised view, index, or sink), ranked by its slowest actor. A high <b>max</b> with a low <b>median</b> means one straggler actor — data skew or a hot key; a high <b>median</b> means the whole pipeline is slow. <b>actors</b> is that pipeline's parallelism.",
           ),
         );
         out.push(
@@ -2054,9 +2092,9 @@
             "pipelines",
             [
               { label: "Pipeline", type: "text", cls: "mono", get: (r) => r[3] },
-              { label: "max", type: "num", get: (r) => r[0], cell: (r) => `<td class=num>${r[0].toFixed(2)}s</td>` },
-              { label: "median", type: "num", get: (r) => r[1], cell: (r) => `<td class=num>${r[1].toFixed(2)}s</td>` },
-              { label: "actors", type: "num", get: (r) => r[2], cell: (r) => `<td class=num>${nf(r[2])}</td>` },
+              { label: "Max", type: "num", get: (r) => r[0], cell: (r) => `<td class=num>${r[0].toFixed(2)}s</td>` },
+              { label: "Median", type: "num", get: (r) => r[1], cell: (r) => `<td class=num>${r[1].toFixed(2)}s</td>` },
+              { label: "Actors", type: "num", get: (r) => r[2], cell: (r) => `<td class=num>${nf(r[2])}</td>` },
             ],
             data.pipelines,
           ),
@@ -2072,11 +2110,11 @@
           tableHTML(
             "actors",
             [
-              { label: "wait", type: "num", get: (r) => r[0], cell: (r) => `<td class=num>${r[0].toFixed(2)}s</td>` },
-              { label: "actor", type: "num", get: (r) => r[1], cell: (r) => `<td class=num>${r[1]}</td>` },
-              { label: "pipeline", type: "text", cls: "mono", get: (r) => r[2] },
+              { label: "Epoch Wait", type: "num", get: (r) => r[0], cell: (r) => `<td class=num>${r[0].toFixed(2)}s</td>` },
+              { label: "Actor", type: "num", get: (r) => r[1], cell: (r) => `<td class=num>${r[1]}</td>` },
+              { label: "Pipeline", type: "text", cls: "mono", get: (r) => r[2] },
               {
-                label: "await",
+                label: "Await Point",
                 type: "text",
                 get: (r) => normaliseCategory(r[3]),
                 cell: (r) => `<td>${badge(normaliseCategory(r[3]))}</td>`,
@@ -2103,7 +2141,7 @@
             tableHTML(
               "jvmGroups",
               [
-                { label: "Thread group", type: "text", cls: "mono", get: (r) => r[0] },
+                { label: "Thread Group", type: "text", cls: "mono", get: (r) => r[0] },
                 { label: "Count", type: "num", get: (r) => r[1], cell: (r) => `<td class=num>${r[1]}</td>` },
               ],
               j.groups,
