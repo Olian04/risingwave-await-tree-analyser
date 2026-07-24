@@ -1687,7 +1687,8 @@
         const NW = GNODE_W,
           NH = GNODE_H,
           PADX = 16,
-          PADY = 16;
+          PADY = 16,
+          PADTOP = 48; // extra top clearance so the top-right control bar never covers the first row
         // Hand-rolled layered (Sugiyama) layout, left→right: downstream on the left, roots on the
         // right. Longest-path ranking → dummy vertices for edges spanning ranks → median crossing
         // reduction → barycentre coordinate assignment. Edges spline through their dummy waypoints.
@@ -1844,7 +1845,7 @@
         const colX = (r) => PADX + r * COLW;
         // Real-node top-left positions; dummy centres for edge routing.
         const posDraw = new Map();
-        for (const n of nodes.keys()) posDraw.set(n, { x: colX(rank.get(n)), y: PADY + yc.get(n) });
+        for (const n of nodes.keys()) posDraw.set(n, { x: colX(rank.get(n)), y: PADTOP + yc.get(n) });
         // Each dummy is a clear horizontal slot spanning its whole column (xl → xr at centre-y). Routing
         // an edge left-to-right across that slot keeps the in-column travel horizontal and clear; all the
         // vertical movement then happens in the empty channels between columns.
@@ -1852,7 +1853,7 @@
         for (const chain of routes.values())
           for (const id of chain) {
             const v = vnode.get(id);
-            dpos.set(id, { xl: colX(v.rank), xr: colX(v.rank) + NW, y: PADY + yc.get(id) + NH / 2 });
+            dpos.set(id, { xl: colX(v.rank), xr: colX(v.rank) + NW, y: PADTOP + yc.get(id) + NH / 2 });
           }
         // Layout bounds.
         let W = 0,
