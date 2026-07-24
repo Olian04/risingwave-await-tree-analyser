@@ -269,6 +269,70 @@
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         font-size: 12.5px;
       }
+      /* scroll container for graph tables — all rows exist (virtualised), height is capped, header sticks */
+      .tscroll {
+        max-height: 460px;
+        overflow: auto;
+        border: 1px solid var(--bd);
+        border-radius: 10px;
+      }
+      .tscroll table {
+        border: none;
+        border-radius: 0;
+        overflow: visible;
+      }
+      .tscroll thead {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+      }
+      .tscroll thead th {
+        background: var(--panel2);
+      }
+      .tscroll tr.filtrow td {
+        background: var(--panel);
+      }
+      .chainscroll {
+        max-height: 460px;
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      /* visible thin scrollbars — themselves a hint that a pane scrolls */
+      .tscroll,
+      .chainscroll,
+      .gscroll {
+        scrollbar-width: thin;
+        scrollbar-color: #3a4150 transparent;
+      }
+      .tscroll::-webkit-scrollbar,
+      .chainscroll::-webkit-scrollbar,
+      .gscroll::-webkit-scrollbar {
+        width: 11px;
+        height: 11px;
+      }
+      .tscroll::-webkit-scrollbar-thumb,
+      .chainscroll::-webkit-scrollbar-thumb,
+      .gscroll::-webkit-scrollbar-thumb {
+        background: #3a4150;
+        border: 3px solid transparent;
+        border-radius: 8px;
+        background-clip: padding-box;
+      }
+      .tscroll::-webkit-scrollbar-thumb:hover,
+      .chainscroll::-webkit-scrollbar-thumb:hover,
+      .gscroll::-webkit-scrollbar-thumb:hover {
+        background: #4a5262;
+        background-clip: padding-box;
+      }
+      /* fade the bottom edge only while there's more to scroll to (toggled in JS) */
+      .tscroll.moredown,
+      .chainscroll.moredown,
+      .gscroll.moredown {
+        -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 30px), transparent);
+        mask-image: linear-gradient(to bottom, #000 calc(100% - 30px), transparent);
+      }
       .badge {
         display: inline-block;
         padding: 1px 8px;
@@ -316,7 +380,6 @@
         border: 1px solid var(--bd);
         border-radius: 10px;
         padding: 12px 14px;
-        margin: 10px 0;
       }
       .chain.clickable {
         cursor: pointer;
@@ -541,15 +604,6 @@
       #body svg .gnode {
         cursor: pointer;
       }
-      .graphbar {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin: 4px 0 8px;
-      }
-      .graphbar button {
-        padding: 4px 10px;
-      }
       .glegend {
         display: flex;
         gap: 14px;
@@ -569,26 +623,6 @@
         height: 11px;
         border-radius: 3px;
         display: inline-block;
-      }
-      button.more {
-        width: 100%;
-        margin: 10px 0 2px;
-        color: var(--mut);
-        background: var(--panel);
-        border-style: dashed;
-      }
-      .morewrap {
-        display: block;
-        cursor: not-allowed;
-      }
-      button.more:disabled {
-        opacity: 0.45;
-        pointer-events: none;
-      }
-      button.more:hover {
-        color: var(--tx);
-        border-color: #3a4150;
-        background: var(--panel2);
       }
       #prog {
         width: min(720px, 92vw);
@@ -1444,40 +1478,14 @@
         return `<details class=info><summary><i class="fa-solid fa-circle-info"></i> How to read this</summary><div class=ibody>${htmlStr}</div></details>`;
       }
 
-      // per-section "show more" state — each section starts small and expands independently
-      const SECTION_CFG = {
-        graph: { init: 6, step: 6 },
-        chains: { init: 5, step: 5 },
-        pipelines: { init: 8, step: 12 },
-        awaits: { init: 8, step: 12 },
-        actors: { init: 8, step: 12 },
-        jvmGroups: { init: 8, step: 12 },
-        jvmRun: { init: 6, step: 10 },
-      };
-      let SHOWN = {};
-      function resetShown() {
-        SHOWN = {};
-        for (const k in SECTION_CFG) SHOWN[k] = SECTION_CFG[k].init;
-      }
-      // How many rows to actually display: if fewer than 5 remain hidden, just show them all (no point
-      // making the user click "show more" for one or two extra rows).
-      function effShown(key, total) {
-        const shown = SHOWN[key] || 0;
-        return total - shown < 5 ? total : shown;
-      }
-      function moreBtn(key, total) {
-        const shown = SHOWN[key] || 0;
-        if (effShown(key, total) >= total) return "";
-        return `<button class=more data-sec="${key}"><i class="fa-solid fa-chevron-down"></i> Show more (${total - shown} more)</button>`;
-      }
-
       // ---- sortable + filterable tables ----
-      // Filtering/sorting operate on the FULL dataset for that section, then the result
-      // is sliced to SHOWN[key]; they never limit what was parsed/analysed.
+      // Filtering/sorting operate on the FULL dataset for that section; every row is kept (in VTABLES) and
+      // the table is virtual-scrolled, so nothing is ever hidden from search/sort.
       let TABLE_STATE = {}; // secKey -> {sort:colIndex|null, dir:1|-1, filter:""}
       function tstate(k) {
         return TABLE_STATE[k] || (TABLE_STATE[k] = { sort: null, dir: -1, filter: "" });
       }
+      let VTABLES = {}; // secKey -> { cols, rows } handed to the virtual scroller (full, filtered+sorted)
       function tableHTML(secKey, columns, rows) {
         const st = tstate(secKey);
         let full = rows;
@@ -1493,30 +1501,75 @@
             return c.type === "num" ? (x - y) * st.dir : String(x).localeCompare(String(y)) * st.dir;
           });
         }
-        const shown = full.slice(0, effShown(secKey, full.length));
+        VTABLES[secKey] = { cols: columns, rows: full }; // every row kept here; the DOM only holds a window
         const ths = columns
           .map((c, i) => {
             const ar = st.sort === i ? (st.dir < 0 ? " ▾" : " ▴") : "";
             return `<th class="th-sort${c.type === "num" ? " num" : ""}" data-sec="${secKey}" data-col="${i}" title="click to sort">${esc(c.label)}${ar}</th>`;
           })
           .join("");
-        const filt = `<tr class=filtrow><td colspan="${columns.length}"><input class=tfilter data-sec="${secKey}" placeholder="filter ${esc(secKey)}…" value="${esc(st.filter)}"></td></tr>`;
-        const body = shown
-          .map(
-            (r) =>
-              "<tr>" +
-              columns
-                .map((c) =>
-                  c.cell ? c.cell(r) : `<td class="${c.cls || (c.type === "num" ? "num" : "")}">${esc(c.get(r))}</td>`,
-                )
-                .join("") +
-              "</tr>",
-          )
-          .join("");
-        return (
-          `<table class=sortable><thead><tr>${ths}</tr>${filt}</thead><tbody>${body}</tbody></table>` +
-          moreBtn(secKey, full.length)
-        );
+        const filt = `<tr class=filtrow><td colspan="${columns.length}"><input class=tfilter data-sec="${secKey}" placeholder="filter ${esc(secKey)} (${full.length})…" value="${esc(st.filter)}"></td></tr>`;
+        // tbody is filled by wireTables (virtual scroll — only the visible rows exist in the DOM).
+        return `<div class="tscroll" data-sec="${secKey}"><table class=sortable><thead><tr>${ths}</tr>${filt}</thead><tbody></tbody></table></div>`;
+      }
+      // Virtual scroll: for each .tscroll table keep only the visible window (+buffer) of <tr> in the DOM,
+      // re-rendering that window on scroll. Sorting/filtering already produced the full ordered rows in
+      // VTABLES, so search + sort operate over ALL rows even though only ~30 are ever in the DOM.
+      function wireTables() {
+        for (const el of $("body").querySelectorAll(".tscroll[data-sec]")) {
+          const vt = VTABLES[el.dataset.sec];
+          if (!vt) continue;
+          const tbody = el.querySelector("tbody"),
+            cols = vt.cols,
+            rows = vt.rows,
+            ncol = cols.length,
+            total = rows.length;
+          if (!total) {
+            tbody.innerHTML = "";
+            continue;
+          }
+          const rowHtml = (r) =>
+            "<tr>" +
+            cols.map((c) => (c.cell ? c.cell(r) : `<td class="${c.cls || (c.type === "num" ? "num" : "")}">${esc(c.get(r))}</td>`)).join("") +
+            "</tr>";
+          const spacer = (h) => `<tr class=vspace><td colspan=${ncol} style="height:${h}px;padding:0;border:0"></td></tr>`;
+          const BUF = 6;
+          let rowH = 0,
+            lastFirst = -1;
+          const paint = () => {
+            const vis = Math.max(1, Math.ceil((el.clientHeight || 400) / rowH)),
+              win = vis + 2 * BUF;
+            let first = Math.max(0, Math.floor(el.scrollTop / rowH) - BUF);
+            first = Math.min(first, Math.max(0, total - win));
+            if (first === lastFirst) return;
+            lastFirst = first;
+            const end = Math.min(total, first + win);
+            let html = spacer(first * rowH);
+            for (let i = first; i < end; i++) html += rowHtml(rows[i]);
+            tbody.innerHTML = html + spacer(Math.max(0, (total - end) * rowH));
+          };
+          tbody.innerHTML = rowHtml(rows[0]); // one real row to measure height
+          rowH = tbody.firstChild.getBoundingClientRect().height || 34;
+          lastFirst = -1;
+          paint();
+          scrollHint(el);
+          el.onscroll = () =>
+            requestAnimationFrame(() => {
+              paint();
+              scrollHint(el);
+            });
+        }
+      }
+      // Toggle the bottom-fade hint when a scroll pane has more content below the fold.
+      function scrollHint(el) {
+        el.classList.toggle("moredown", el.scrollTop + el.clientHeight < el.scrollHeight - 2);
+      }
+      // Wire the non-table scroll panes (chain list, graph) for the same bottom-fade hint.
+      function wireScrollHints() {
+        for (const el of $("body").querySelectorAll(".chainscroll, .gscroll")) {
+          scrollHint(el);
+          el.onscroll = () => scrollHint(el); // property handler: idempotent across graph-only redraws
+        }
       }
 
       // edge colour by backpressure importance: teal (low) -> amber -> red (high)
@@ -1554,25 +1607,34 @@
       let SEARCH_OPEN = false; // is the node-search control expanded into an input?
       let SEARCH_Q = ""; // current node-search query
       let SUPPRESS_CLICK = false; // set after a pan drag so the trailing click doesn't clear/highlight
+      let SEARCH_RENDER_TIMER = null; // debounce for re-laying-out the graph while typing a search
 
       // Control bar shown at the top-right of the graph: search, full screen, zoom in/out, reset zoom.
       // The search control is a square button that expands into a rectangle (input + clear button) when open.
       function graphControls() {
         const searchIcon = SEARCH_OPEN ? "fa-xmark" : "fa-magnifying-glass";
+        // Each control carries data-desc (hover/focus popover, same system as the (i) markers) plus a
+        // matching aria-label for screen readers — no native title, to avoid a double tooltip.
+        const tip = (t) => `data-desc="${esc(t)}" aria-label="${esc(t)}"`;
+        const searchTip = SEARCH_OPEN ? "Clear search" : "Search for a node by name";
+        const scaleTip =
+          "Edge colour & width scale: " +
+          (EDGE_SCALE === "rel" ? "relative (0 → busiest edge in report)" : "absolute (0 → 10s)") +
+          " — click to switch";
         return (
           "<div class=gctrl>" +
           (GRAPH_FILTER
-            ? '<button class=gc-btn id=gc-showall title="Show all nodes (clear focus)"><i class="fa-solid fa-eye"></i></button>'
+            ? `<button class=gc-btn id=gc-showall ${tip("Show all nodes — clear the focused component")}><i class="fa-solid fa-eye"></i></button>`
             : "") +
           `<div class="gc-search${SEARCH_OPEN ? " open" : ""}">` +
           (SEARCH_OPEN ? `<input id=gc-input class=gc-input type=text placeholder="Search node" value="${esc(SEARCH_Q)}" />` : "") +
-          `<button class=gc-btn id=gc-searchbtn title="${SEARCH_OPEN ? "Clear search" : "Search node"}"><i class="fa-solid ${searchIcon}"></i></button>` +
+          `<button class=gc-btn id=gc-searchbtn ${tip(searchTip)}><i class="fa-solid ${searchIcon}"></i></button>` +
           "</div>" +
-          `<button class="gc-btn${EDGE_SCALE === "rel" ? " gc-on" : ""}" id=gc-scale title="Edge colour scale: ${EDGE_SCALE === "rel" ? "relative (0 → busiest edge)" : "absolute (0 → 10s)"} — click to toggle"><i class="fa-solid fa-ruler-horizontal"></i></button>` +
-          '<button class=gc-btn id=gc-fs title="Full screen"><i class="fa-solid fa-expand"></i></button>' +
-          '<button class=gc-btn id=gc-zin title="Zoom in"><i class="fa-solid fa-plus"></i></button>' +
-          '<button class=gc-btn id=gc-zout title="Zoom out"><i class="fa-solid fa-minus"></i></button>' +
-          '<button class=gc-btn id=gc-zreset title="Reset zoom"><i class="fa-solid fa-arrows-rotate"></i></button>' +
+          `<button class="gc-btn${EDGE_SCALE === "rel" ? " gc-on" : ""}" id=gc-scale ${tip(scaleTip)}><i class="fa-solid fa-ruler-horizontal"></i></button>` +
+          `<button class=gc-btn id=gc-fs ${tip("Toggle full screen")}><i class="fa-solid fa-expand"></i></button>` +
+          `<button class=gc-btn id=gc-zin ${tip("Zoom in")}><i class="fa-solid fa-plus"></i></button>` +
+          `<button class=gc-btn id=gc-zout ${tip("Zoom out")}><i class="fa-solid fa-minus"></i></button>` +
+          `<button class=gc-btn id=gc-zreset ${tip("Reset zoom to 100%")}><i class="fa-solid fa-arrows-rotate"></i></button>` +
           "</div>"
         );
       }
@@ -1608,20 +1670,29 @@
           pushMap(adj, ef, et);
           pushMap(adj, et, ef);
         }
+        const expand = (seeds) => {
+          const set = new Set(),
+            q = [...seeds];
+          while (q.length) {
+            const c = q.shift();
+            if (set.has(c)) continue;
+            set.add(c);
+            for (const nb of adj.get(c) || []) if (!set.has(nb)) q.push(nb);
+          }
+          return set;
+        };
         let keep;
-        if (GRAPH_FILTER) {
+        if (SEARCH_Q.trim()) {
+          // Search: keep only components that contain a node matching the query (within the focus, if any).
+          const qq = SEARCH_Q.trim().toLowerCase();
+          const seed = [...nodes.keys()].filter((n) => n.toLowerCase().includes(qq) && (!GRAPH_FILTER || GRAPH_FILTER.has(n)));
+          keep = expand(seed);
+        } else if (GRAPH_FILTER) {
           keep = GRAPH_FILTER;
         } else {
           const seed = new Set();
           for (const ch of chains.slice(0, Math.min(limit, chains.length))) for (const h of ch.hops) seed.add(h[0]);
-          keep = new Set();
-          const q = [...seed];
-          while (q.length) {
-            const c = q.shift();
-            if (keep.has(c)) continue;
-            keep.add(c);
-            for (const nb of adj.get(c) || []) if (!keep.has(nb)) q.push(nb);
-          }
+          keep = expand(seed);
         }
         for (const n of [...nodes.keys()]) if (!keep.has(n)) nodes.delete(n);
         for (const k of [...edges.keys()]) {
@@ -1886,9 +1957,9 @@
           ),
         );
         out.push(
-          "<table><thead><tr><th>Root await</th><th class=num>Actors</th><th>Share</th></tr></thead><tbody>" +
+          '<div class=tscroll><table><thead><tr><th>Root await</th><th class=num>Actors</th><th>Share</th></tr></thead><tbody>' +
             data.root_split.map(([l, c]) => barRow(l, c, total, true)).join("") +
-            "</tbody></table>",
+            "</tbody></table></div>",
         );
 
         out.push(h2("fa-hourglass-half", "Primary await-point (all actors)"));
@@ -1932,13 +2003,8 @@
           "<div class=graphwrap>" +
             graphControls() +
             "<div class=gscroll>" +
-            graphSvg(data.chains, effShown("graph", data.chains.length)) +
+            graphSvg(data.chains, data.chains.length) +
             "</div></div>",
-        );
-        out.push(
-          GRAPH_FILTER
-            ? '<span class=morewrap tabindex=0 role=button data-desc="Focused on one component. Use “show all nodes” (the eye button on the graph) to clear the focus before paging through every chain."><button class=more disabled><i class="fa-solid fa-chevron-down"></i> Show more</button></span>'
-            : moreBtn("graph", data.chains.length),
         );
         out.push(
           "<div class=glegend>" +
@@ -1962,7 +2028,8 @@
             "For each of the slowest pipelines, its single most-stuck path traced to the root, with the wait at each hop. Read top→bottom: the first line is the slow pipeline; indented lines are successively further upstream. The badge shows what each hop is blocked on, and where the chain bottoms out is the cause — <b>Source/UpstreamSinkUnion</b> = ingestion, <b>wait_pending_fetch_block</b> = storage. When every wait is small and similar, the cluster is healthy and no single path is meaningful — read the roots table above for the overall picture. <b>Click a chain</b> to highlight its nodes in the graph above.",
           ),
         );
-        for (const ch of data.chains.slice(0, effShown("chains", data.chains.length))) {
+        out.push('<div class=chainscroll>');
+        for (const ch of data.chains) {
           out.push(
             `<div class="chain clickable" data-pipeline="${esc(ch.pipeline)}" title="Show this pipeline in the graph above">` +
               "<div class=title><span class=mono>" +
@@ -1978,8 +2045,7 @@
           });
           out.push("</div>");
         }
-
-        out.push(moreBtn("chains", data.chains.length));
+        out.push("</div>");
 
         out.push(h2("fa-chart-column", "Epoch-wait distribution"));
         out.push(
@@ -1988,9 +2054,9 @@
           ),
         );
         out.push(
-          "<table><thead><tr><th>Bucket</th><th class=num>Actors</th><th>Share</th></tr></thead><tbody>" +
+          '<div class=tscroll><table><thead><tr><th>Bucket</th><th class=num>Actors</th><th>Share</th></tr></thead><tbody>' +
             data.distribution.map(([l, c]) => barRow(l, c, total)).join("") +
-            "</tbody></table>",
+            "</tbody></table></div>",
         );
 
         out.push(h2("fa-timeline", "Pipelines by max epoch-wait"));
@@ -2431,6 +2497,8 @@
         }
         wireGraphInteract();
         wireGraphControls();
+        wireTables();
+        wireScrollHints();
       }
 
       // Dim graph nodes that don't match the current search query; thicken the ones that do. Applied
@@ -2471,8 +2539,8 @@
       function wireGraphControls() {
         const wrap = $("body").querySelector(".graphwrap");
         if (!wrap) return;
-        const svg = wrap.querySelector(".gscroll svg");
         const applyZoom = () => {
+          const svg = wrap.querySelector(".gscroll svg"); // query fresh: the svg is replaced on a graph-only redraw
           if (!svg) return;
           const vb = (svg.getAttribute("viewBox") || "0 0 0 0").split(/\s+/).map(Number);
           svg.setAttribute("width", vb[2] * GRAPH_ZOOM);
@@ -2532,7 +2600,10 @@
           } catch (_) {}
           inp.oninput = () => {
             SEARCH_Q = inp.value;
-            applySearch();
+            clearTimeout(SEARCH_RENDER_TIMER);
+            // re-layout the graph to only the components with a match (debounced so typing stays smooth);
+            // rebuilds just the svg, leaving this input focused.
+            SEARCH_RENDER_TIMER = setTimeout(redrawGraphSvgOnly, 140);
           };
           inp.onkeydown = (e) => {
             if (e.key === "Escape") {
@@ -2583,12 +2654,27 @@
         // Rebuild the control bar + graph inside the persistent .graphwrap (so the control bar reflects
         // filter changes), without touching the rest of the report — keeps a fullscreened graph fullscreen.
         wrap.innerHTML =
-          graphControls() +
-          "<div class=gscroll>" +
-          graphSvg(STATE._data.chains, effShown("graph", STATE._data.chains.length)) +
-          "</div>";
+          graphControls() + "<div class=gscroll>" + graphSvg(STATE._data.chains, STATE._data.chains.length) + "</div>";
         wireGraphInteract();
         wireGraphControls();
+        wireScrollHints();
+      }
+      // Rebuild ONLY the graph svg (not the control bar) — used while typing a search so the query's
+      // component filter re-lays-out the graph without stealing focus from the search input.
+      function redrawGraphSvgOnly() {
+        const scroll = $("body").querySelector(".graphwrap .gscroll");
+        if (!scroll || !STATE || !STATE._data) return;
+        scroll.innerHTML = graphSvg(STATE._data.chains, STATE._data.chains.length);
+        const svg = scroll.querySelector("svg");
+        if (svg) {
+          const vb = (svg.getAttribute("viewBox") || "0 0 0 0").split(/\s+/).map(Number);
+          svg.setAttribute("width", vb[2] * GRAPH_ZOOM);
+          svg.setAttribute("height", vb[3] * GRAPH_ZOOM);
+        }
+        wireGraphInteract();
+        applySearch();
+        applyHighlight();
+        scrollHint(scroll);
       }
 
       // The connected component containing `node`, computed from the full chain set (not the current view).
@@ -2689,7 +2775,6 @@
         $("summary").textContent =
           `${nf(STATE.actors.length)} actors · ${nf(STATE.jvm.length)} JVM threads` +
           (STATE.prefix ? ` · stripped ${STATE.prefix}-char line prefix` : "");
-        resetShown();
         draw();
       }
 
@@ -2878,18 +2963,6 @@
             draw();
             $("body").querySelector(".graphwrap")?.scrollIntoView({ behavior: "smooth", block: "start" }); // scroll up
           }
-          return;
-        }
-        const more = e.target.closest(".more");
-        if (more) {
-          const sec = more.dataset.sec,
-            cfg = SECTION_CFG[sec] || { step: 10 };
-          SHOWN[sec] = (SHOWN[sec] || 0) + cfg.step;
-          if (sec === "graph") {
-            GRAPH_FILTER = null;
-            GRAPH_HIGHLIGHT = null;
-          } // node set changed -> reset graph selection
-          draw();
           return;
         }
         const th = e.target.closest(".th-sort");
