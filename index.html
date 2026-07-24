@@ -7,10 +7,12 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" />
     <style>
       :root {
+        /* palette */
         --bg: #0f1115;
         --panel: #181b22;
         --panel2: #1f232c;
         --bd: #2b303b;
+        --bd-strong: var(--bd-strong);
         --tx: #e6e8ec;
         --mut: #9aa3af;
         --accent: #6ea8fe;
@@ -21,6 +23,24 @@
         --purple: #9b8cf0;
         --gray: #6b7280;
         --green: #57b368;
+        /* semantic (dedupe of former hard-coded values) */
+        --bar-bg: var(--bar-bg);
+        --drop-hot: var(--drop-hot);
+        --warn-bg: var(--warn-bg);
+        --scroll: var(--bd-strong);
+        --scroll-hover: var(--scroll-hover);
+        /* radius scale */
+        --r-xs: 4px;
+        --r-sm: 6px;
+        --r: 8px;
+        --r-lg: 10px;
+        --r-xl: 16px;
+        --pill: 999px;
+        /* spacing scale (available for consistent gaps/padding) */
+        --sp-2: 6px;
+        --sp-3: 8px;
+        --sp-4: 12px;
+        --sp-5: 16px;
       }
       * {
         box-sizing: border-box;
@@ -78,7 +98,7 @@
       .drop {
         width: min(720px, 92vw);
         border: 1.5px dashed var(--bd);
-        border-radius: 16px;
+        border-radius: var(--r-xl);
         background: var(--panel);
         padding: 48px 32px;
         text-align: center;
@@ -89,7 +109,7 @@
       }
       .drop.hot {
         border-color: var(--accent);
-        background: #1b2230;
+        background: var(--drop-hot);
       }
       .drop .big {
         font-size: 19px;
@@ -104,7 +124,7 @@
       .drop kbd {
         background: var(--panel2);
         border: 1px solid var(--bd);
-        border-radius: 5px;
+        border-radius: var(--r-sm);
         padding: 1px 6px;
         font-size: 12px;
         font-family: ui-monospace, monospace;
@@ -128,7 +148,7 @@
         position: sticky;
         top: 0;
         z-index: 5;
-        background: rgba(15, 17, 21, 0.92);
+        background: var(--bar-bg);
         backdrop-filter: blur(6px);
         border-bottom: 1px solid var(--bd);
       }
@@ -137,7 +157,7 @@
         margin: 0 auto;
         padding: 12px 22px;
         display: flex;
-        gap: 14px;
+        gap: var(--sp-5);
         align-items: center;
         flex-wrap: wrap;
       }
@@ -156,14 +176,14 @@
         font-size: 12.5px;
         display: flex;
         align-items: center;
-        gap: 5px;
+        gap: var(--sp-2);
       }
       .bar input[type="number"] {
         width: 64px;
         background: var(--panel);
         border: 1px solid var(--bd);
         color: var(--tx);
-        border-radius: 6px;
+        border-radius: var(--r-sm);
         padding: 4px 6px;
         font: inherit;
       }
@@ -171,20 +191,20 @@
         background: var(--panel);
         border: 1px solid var(--bd);
         color: var(--tx);
-        border-radius: 8px;
+        border-radius: var(--r);
         padding: 6px 12px;
         font: inherit;
         cursor: pointer;
       }
       button:hover {
         background: var(--panel2);
-        border-color: #3a4150;
+        border-color: var(--bd-strong);
       }
       .banner {
-        background: #211d16;
+        background: var(--warn-bg);
         border: 1px solid rgba(224, 161, 60, 0.4);
         color: var(--amber);
-        border-radius: 10px;
+        border-radius: var(--r-lg);
         padding: 10px 14px;
         margin: 14px 0;
         font-size: 13px;
@@ -193,13 +213,13 @@
       .cards {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 12px;
+        gap: var(--sp-4);
         margin: 16px 0;
       }
       .card {
         background: var(--panel);
         border: 1px solid var(--bd);
-        border-radius: 10px;
+        border-radius: var(--r-lg);
         padding: 14px 16px;
       }
       .card .k {
@@ -217,7 +237,7 @@
         border-collapse: collapse;
         background: var(--panel);
         border: 1px solid var(--bd);
-        border-radius: 10px;
+        border-radius: var(--r-lg);
         overflow: hidden;
         font-variant-numeric: tabular-nums;
       }
@@ -244,7 +264,7 @@
       .barcell {
         position: relative;
         background: var(--panel2);
-        border-radius: 5px;
+        border-radius: var(--r-sm);
         height: 18px;
         min-width: 40px;
       }
@@ -254,7 +274,7 @@
         top: 0;
         bottom: 0;
         background: var(--accent);
-        border-radius: 5px;
+        border-radius: var(--r-sm);
         opacity: 0.55;
       }
       .barcell > em {
@@ -274,7 +294,7 @@
         max-height: 460px;
         overflow: auto;
         border: 1px solid var(--bd);
-        border-radius: 10px;
+        border-radius: var(--r-lg);
       }
       .tscroll table {
         border: none;
@@ -297,14 +317,14 @@
         overflow: auto;
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: var(--sp-3);
       }
       /* visible thin scrollbars — themselves a hint that a pane scrolls */
       .tscroll,
       .chainscroll,
       .gscroll {
         scrollbar-width: thin;
-        scrollbar-color: #3a4150 transparent;
+        scrollbar-color: var(--bd-strong) transparent;
       }
       .tscroll::-webkit-scrollbar,
       .chainscroll::-webkit-scrollbar,
@@ -315,15 +335,15 @@
       .tscroll::-webkit-scrollbar-thumb,
       .chainscroll::-webkit-scrollbar-thumb,
       .gscroll::-webkit-scrollbar-thumb {
-        background: #3a4150;
+        background: var(--bd-strong);
         border: 3px solid transparent;
-        border-radius: 8px;
+        border-radius: var(--r);
         background-clip: padding-box;
       }
       .tscroll::-webkit-scrollbar-thumb:hover,
       .chainscroll::-webkit-scrollbar-thumb:hover,
       .gscroll::-webkit-scrollbar-thumb:hover {
-        background: #4a5262;
+        background: var(--scroll-hover);
         background-clip: padding-box;
       }
       /* fade the bottom edge only while there's more to scroll to (toggled in JS) */
@@ -334,51 +354,40 @@
         mask-image: linear-gradient(to bottom, #000 calc(100% - 30px), transparent);
       }
       .badge {
+        --badge: var(--gray);
         display: inline-block;
         padding: 1px 8px;
-        border-radius: 20px;
+        border-radius: var(--pill);
         font-size: 11.5px;
-        border: 1px solid var(--bd);
+        border: 1px solid color-mix(in srgb, var(--badge) 50%, transparent);
+        background: color-mix(in srgb, var(--badge) 16%, transparent);
+        color: var(--badge);
       }
       .b-amber {
-        background: rgba(224, 161, 60, 0.16);
-        border-color: rgba(224, 161, 60, 0.5);
-        color: var(--amber);
+        --badge: var(--amber);
       }
       .b-red {
-        background: rgba(224, 90, 90, 0.16);
-        border-color: rgba(224, 90, 90, 0.5);
-        color: var(--red);
+        --badge: var(--red);
       }
       .b-blue {
-        background: rgba(90, 160, 224, 0.16);
-        border-color: rgba(90, 160, 224, 0.5);
-        color: var(--blue);
+        --badge: var(--blue);
       }
       .b-teal {
-        background: rgba(63, 184, 160, 0.16);
-        border-color: rgba(63, 184, 160, 0.5);
-        color: var(--teal);
+        --badge: var(--teal);
       }
       .b-purple {
-        background: rgba(155, 140, 240, 0.16);
-        border-color: rgba(155, 140, 240, 0.5);
-        color: var(--purple);
+        --badge: var(--purple);
       }
       .b-gray {
-        background: rgba(107, 114, 128, 0.16);
-        border-color: rgba(107, 114, 128, 0.5);
-        color: var(--mut);
+        --badge: var(--mut);
       }
       .b-green {
-        background: rgba(87, 179, 104, 0.16);
-        border-color: rgba(87, 179, 104, 0.5);
-        color: var(--green);
+        --badge: var(--green);
       }
       .chain {
         background: var(--panel);
         border: 1px solid var(--bd);
-        border-radius: 10px;
+        border-radius: var(--r-lg);
         padding: 12px 14px;
       }
       .chain.clickable {
@@ -401,7 +410,7 @@
       .hop {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: var(--sp-3);
         padding: 3px 0;
       }
       .hop .arm {
@@ -426,7 +435,7 @@
       .pill {
         display: inline-block;
         padding: 1px 7px;
-        border-radius: 6px;
+        border-radius: var(--r-sm);
         background: var(--panel2);
         color: var(--mut);
         font-size: 12px;
@@ -439,7 +448,7 @@
       details.info {
         margin: -6px 0 16px;
         border: 1px solid var(--bd);
-        border-radius: 8px;
+        border-radius: var(--r);
         background: var(--panel2);
       }
       details.info > summary {
@@ -464,13 +473,13 @@
       details.info .ibody code {
         background: var(--panel);
         border: 1px solid var(--bd);
-        border-radius: 4px;
+        border-radius: var(--r-xs);
         padding: 0 4px;
       }
       .graphwrap {
         position: relative;
         border: 1px solid var(--bd);
-        border-radius: 10px;
+        border-radius: var(--r-lg);
         background: var(--panel);
         margin: 6px 0 4px;
       }
@@ -478,7 +487,7 @@
         overflow: auto;
         max-height: 78vh;
         padding: 14px;
-        border-radius: 10px;
+        border-radius: var(--r-lg);
       }
       .graphwrap:fullscreen {
         max-height: none;
@@ -493,7 +502,7 @@
         top: 10px;
         right: 10px;
         display: flex;
-        gap: 6px;
+        gap: var(--sp-2);
         z-index: 6;
       }
       .gc-btn {
@@ -501,7 +510,7 @@
         height: 32px;
         padding: 0;
         border: 1px solid var(--bd);
-        border-radius: 8px;
+        border-radius: var(--r);
         background: var(--panel2);
         color: var(--tx);
         cursor: pointer;
@@ -525,7 +534,7 @@
       .gc-search.open {
         background: var(--panel2);
         border: 1px solid var(--bd);
-        border-radius: 8px;
+        border-radius: var(--r);
       }
       .gc-search.open .gc-btn {
         border: none;
@@ -572,6 +581,18 @@
       .gscroll .gnode {
         cursor: pointer;
       }
+      /* colour variants: one --c per palette hue, shared by graph nodes and legend swatches */
+      .c-amber { --c: var(--amber); }
+      .c-red { --c: var(--red); }
+      .c-blue { --c: var(--blue); }
+      .c-teal { --c: var(--teal); }
+      .c-purple { --c: var(--purple); }
+      .c-gray { --c: var(--gray); }
+      .c-green { --c: var(--green); }
+      .gnode rect {
+        fill: color-mix(in srgb, var(--c, var(--gray)) 13%, transparent);
+        stroke: var(--c, var(--gray));
+      }
       h2 > i.fa-solid {
         color: var(--accent);
         font-size: 0.8em;
@@ -606,7 +627,7 @@
       }
       .glegend {
         display: flex;
-        gap: 14px;
+        gap: var(--sp-5);
         flex-wrap: wrap;
         color: var(--mut);
         font-size: 12px;
@@ -616,13 +637,18 @@
         font-style: normal;
         display: inline-flex;
         align-items: center;
-        gap: 5px;
+        gap: var(--sp-2);
       }
       .glegend .sw {
         width: 11px;
         height: 11px;
-        border-radius: 3px;
+        border-radius: var(--r-xs);
         display: inline-block;
+        background: var(--c, var(--gray));
+      }
+      .glegend .sw.grad {
+        width: 34px;
+        background: linear-gradient(90deg, var(--teal), var(--amber), var(--red));
       }
       #prog {
         width: min(720px, 92vw);
@@ -640,7 +666,7 @@
         height: 10px;
         background: var(--panel2);
         border: 1px solid var(--bd);
-        border-radius: 6px;
+        border-radius: var(--r-sm);
         overflow: hidden;
         margin-top: 12px;
       }
@@ -669,7 +695,7 @@
         background: var(--panel2);
         border: 1px solid var(--bd);
         color: var(--tx);
-        border-radius: 6px;
+        border-radius: var(--r-sm);
         padding: 4px 8px;
         font: inherit;
         font-size: 12.5px;
@@ -682,18 +708,18 @@
         width: min(720px, 92vw);
         display: flex;
         flex-direction: column;
-        gap: 16px;
+        gap: var(--sp-5);
       }
       /* wraps the three ways to load a dump (meta bar, drop zone, recent files); hidden as one unit while parsing */
       #loaderui {
         display: flex;
         flex-direction: column;
-        gap: 16px;
+        gap: var(--sp-5);
         width: 100%;
       }
       #metabar {
         border: 1px solid var(--bd);
-        border-radius: 12px;
+        border-radius: var(--r-lg);
         background: var(--panel);
         padding: 16px 18px;
       }
@@ -705,14 +731,14 @@
       }
       #metabar .metarow {
         display: flex;
-        gap: 8px;
+        gap: var(--sp-3);
       }
       #metabar input {
         flex: 1;
         background: var(--panel2);
         border: 1px solid var(--bd);
         color: var(--tx);
-        border-radius: 8px;
+        border-radius: var(--r);
         padding: 8px 10px;
         font: inherit;
       }
@@ -740,7 +766,7 @@
       #metabar code {
         background: var(--panel2);
         border: 1px solid var(--bd);
-        border-radius: 4px;
+        border-radius: var(--r-xs);
         padding: 0 4px;
       }
       #recent {
@@ -770,17 +796,17 @@
       #recentlist {
         display: flex;
         flex-direction: column;
-        gap: 6px;
+        gap: var(--sp-2);
       }
       .recentrow {
         display: flex;
         align-items: baseline;
-        gap: 10px;
+        gap: var(--sp-3);
         width: 100%;
         text-align: left;
         background: var(--panel);
         border: 1px solid var(--bd);
-        border-radius: 8px;
+        border-radius: var(--r);
         padding: 8px 12px;
         color: var(--tx);
         font: inherit;
@@ -825,7 +851,7 @@
         background: var(--panel2);
         color: var(--tx);
         border: 1px solid var(--bd);
-        border-radius: 8px;
+        border-radius: var(--r);
         padding: 10px 12px;
         font-size: 12.5px;
         line-height: 1.55;
@@ -1396,40 +1422,6 @@
         return data;
       }
 
-      function toJson(data, source) {
-        const r = (x) => Math.round(x * 1000) / 1000;
-        const o = { source, generated_utc: new Date().toISOString(), total_actors: data.total_actors };
-        if (!data.total_actors) return o;
-        o.stuck_threshold = data.stuck_threshold;
-        o.stuck_count = data.stuck_count;
-        o.wait_stats = {};
-        for (const k in data.wait_stats) o.wait_stats[k] = r(data.wait_stats[k]);
-        o.distribution = data.distribution.map(([b, c]) => ({ bucket: b.replace(/–/g, "-"), actors: c }));
-        o.idle = {
-          actors_with_idle_span: data.idle.with_idle,
-          max_idle_s: r(data.idle.max_idle),
-        };
-        o.root_split = data.root_split.map(([k, v]) => ({ await: k, actors: v }));
-        o.pipelines = data.pipelines.map(([mx, md, c, n]) => ({ pipeline: n, max: r(mx), median: r(md), actors: c }));
-        o.await_points = data.await_points.map(([k, v]) => ({ await: k, actors: v }));
-        o.top_actors = data.top_actors.map(([w, id, n, aw]) => ({ wait: r(w), actor: id, pipeline: n, await: aw }));
-        o.chains = data.chains.map((c) => ({
-          pipeline: c.pipeline,
-          max_wait: r(c.max_wait),
-          actor_count: c.actor_count,
-          hops: c.hops.map(([n, w, cat]) => ({ pipeline: n, wait: r(w), await: cat })),
-        }));
-        if (data.jvm)
-          o.jvm = {
-            total: data.jvm.total,
-            states: data.jvm.states.map(([s, c]) => ({ state: s, count: c })),
-            groups: data.jvm.groups.map(([g, c]) => ({ group: g, count: c })),
-            runnable: data.jvm.runnable.map(([f, c]) => ({ frame: f, count: c })),
-            blocked_count: data.jvm.blocked,
-          };
-        return o;
-      }
-
       // ===================================================================== //
       // Rendering                                                             //
       // ===================================================================== //
@@ -1458,17 +1450,9 @@
         );
       }
 
-      const CAT_HEX = {
-        amber: "#e0a13c",
-        red: "#e05a5a",
-        blue: "#5aa0e0",
-        teal: "#3fb8a0",
-        purple: "#9b8cf0",
-        gray: "#6b7280",
-        green: "#57b368",
-      };
-      function catHex(cat) {
-        return CAT_HEX[CAT_COLOUR[cat] || "gray"];
+      // Node/legend colours are driven by CSS `.c-*` classes (single source of truth: the :root palette).
+      function catColor(cat) {
+        return CAT_COLOUR[cat] || "gray";
       }
       function pushMap(m, k, v) {
         if (!m.has(k)) m.set(k, []);
@@ -1902,13 +1886,12 @@
           s += `<path class=gedge data-from="${esc(f)}" data-to="${esc(t)}" d="${edgePath(pts)}" fill=none stroke="${edgeColor(t01)}" stroke-opacity="0.85" stroke-width=${sw}><title>${esc(f)} → ${esc(t)}: ${w.toFixed(2)}s</title></path>`;
         }
         for (const [n, nd] of nodes) {
-          const p = posDraw.get(n),
-            hex = catHex(nd.cat);
+          const p = posDraw.get(n);
           const disp = n.length > 24 ? n.slice(0, 23) + "…" : n;
           s +=
-            `<g class=gnode data-node="${esc(n)}" data-x="${p.x}" data-y="${p.y}" transform="translate(${p.x},${p.y})">` +
+            `<g class="gnode c-${catColor(nd.cat)}" data-node="${esc(n)}" data-x="${p.x}" data-y="${p.y}" transform="translate(${p.x},${p.y})">` +
             `<title>${esc(n)} — ${esc(nd.cat)} · ${nd.wait.toFixed(2)}s</title>` +
-            `<rect x="0" y="0" width="${NW}" height="${NH}" rx="8" fill="${hex}22" stroke="${hex}" stroke-opacity="0.75" stroke-width="1" />` +
+            `<rect x="0" y="0" width="${NW}" height="${NH}" rx="8" stroke-opacity="0.75" stroke-width="1" />` +
             `<text class=nt x=11 y=18 font-size=12>${esc(disp)}</text>` +
             `<text class=ns x=11 y=34 font-size=11>${esc(nd.cat)} · ${nd.wait.toFixed(2)}s</text>` +
             `</g>`;
@@ -2008,14 +1991,14 @@
         );
         out.push(
           "<div class=glegend>" +
-            '<i><span class=sw style="background:#e0a13c"></span><i class="fa-solid fa-satellite-dish"></i> Source</i>' +
-            '<i><span class=sw style="background:#9b8cf0"></span><i class="fa-solid fa-code-merge"></i> UpstreamSinkUnion</i>' +
-            '<i><span class=sw style="background:#5aa0e0"></span><i class="fa-solid fa-flag-checkered"></i> receive_barrier</i>' +
-            '<i><span class=sw style="background:#e05a5a"></span><i class="fa-solid fa-database"></i> storage fetch</i>' +
-            '<i><span class=sw style="background:#57b368"></span><i class="fa-solid fa-table-list"></i> metadata fetch</i>' +
-            '<i><span class=sw style="background:#3fb8a0"></span><i class="fa-solid fa-faucet-drip"></i> starved sink</i>' +
-            '<i><span class=sw style="background:#6b7280"></span><i class="fa-solid fa-arrow-right-to-bracket"></i> waiting on input</i>' +
-            '<i style="margin-left:auto"><span class=sw style="width:34px;background:linear-gradient(90deg,#3fb8a0,#e0a13c,#e05a5a)"></span>edge = wait ' +
+            '<i><span class="sw c-amber"></span><i class="fa-solid fa-satellite-dish"></i> Source</i>' +
+            '<i><span class="sw c-purple"></span><i class="fa-solid fa-code-merge"></i> UpstreamSinkUnion</i>' +
+            '<i><span class="sw c-blue"></span><i class="fa-solid fa-flag-checkered"></i> receive_barrier</i>' +
+            '<i><span class="sw c-red"></span><i class="fa-solid fa-database"></i> storage fetch</i>' +
+            '<i><span class="sw c-green"></span><i class="fa-solid fa-table-list"></i> metadata fetch</i>' +
+            '<i><span class="sw c-teal"></span><i class="fa-solid fa-faucet-drip"></i> starved sink</i>' +
+            '<i><span class="sw c-gray"></span><i class="fa-solid fa-arrow-right-to-bracket"></i> waiting on input</i>' +
+            '<i style="margin-left:auto"><span class="sw grad"></span>edge = wait ' +
             (EDGE_SCALE === "rel"
               ? `(0s → ${Math.max(0, ...data.chains.flatMap((c) => c.hops.map((h) => h[1]))).toFixed(1)}s, relative)`
               : "(0s → 10s+)") +
@@ -2128,6 +2111,11 @@
           if (j.runnable.length) {
             out.push(h2("fa-bolt", "RUNNABLE threads — representative frame"));
             out.push(
+              info(
+                "For each currently-running (<b>RUNNABLE</b>) JVM thread, the top stack frame is taken as its representative and identical frames are grouped and counted. A frame sitting in a socket read (e.g. <code>SocketStream.read</code>) means those threads are actively pulling from a source or pushing to a sink — this is where the connector is spending CPU right now. A high count on one frame means many threads are doing the same work: a hotspot, and a candidate for the ingestion/egress limiter. Compare against the thread-group table above to see which connector the frames belong to.",
+              ),
+            );
+            out.push(
               tableHTML(
                 "jvmRun",
                 [
@@ -2140,11 +2128,6 @@
           }
           out.push(`<p class=note>Lock-contended (BLOCKED) threads: ${j.blocked}</p>`);
         }
-        out.push(
-          "<p class=note>All " +
-            nf(total) +
-            " actors in the dump were analysed. “Show more” only changes how many rows are displayed — it never limits the analysis.</p>",
-        );
         return out.join("");
       }
 
@@ -2539,20 +2522,13 @@
       function wireGraphControls() {
         const wrap = $("body").querySelector(".graphwrap");
         if (!wrap) return;
-        const applyZoom = () => {
-          const svg = wrap.querySelector(".gscroll svg"); // query fresh: the svg is replaced on a graph-only redraw
-          if (!svg) return;
-          const vb = (svg.getAttribute("viewBox") || "0 0 0 0").split(/\s+/).map(Number);
-          svg.setAttribute("width", vb[2] * GRAPH_ZOOM);
-          svg.setAttribute("height", vb[3] * GRAPH_ZOOM);
-        };
-        applyZoom();
+        zoomGraph(); // apply persisted zoom to the freshly-rendered svg
         applySearch(); // reapply the persisted query after a re-render
         applyHighlight(); // reapply the current node highlight after a re-render
         const byId = (id) => wrap.querySelector("#" + id);
         const setZoom = (z) => {
           GRAPH_ZOOM = Math.max(0.2, Math.min(5, z));
-          applyZoom();
+          zoomGraph();
         };
         const zin = byId("gc-zin"),
           zout = byId("gc-zout"),
@@ -2568,15 +2544,13 @@
         if (scale)
           scale.onclick = () => {
             EDGE_SCALE = EDGE_SCALE === "rel" ? "abs" : "rel"; // toggle edge colour/width scale, then re-render
-            if (document.fullscreenElement) redrawGraphOnly();
-            else draw();
+            rerenderGraph();
           };
         if (showall)
           showall.onclick = () => {
             GRAPH_FILTER = null;
-            GRAPH_HIGHLIGHT = null; // clear the focus; in fullscreen redraw only the graph so we stay in it
-            if (document.fullscreenElement) redrawGraphOnly();
-            else draw();
+            GRAPH_HIGHLIGHT = null; // clear the focus
+            rerenderGraph();
           };
         if (fs)
           fs.onclick = () => {
@@ -2646,6 +2620,20 @@
           scroll.onpointercancel = endPan;
         }
       }
+      // Apply the current zoom factor to the graph svg (viewBox is fixed; width/height scale to zoom).
+      function zoomGraph() {
+        const svg = $("body").querySelector(".graphwrap .gscroll svg");
+        if (!svg) return;
+        const vb = (svg.getAttribute("viewBox") || "0 0 0 0").split(/\s+/).map(Number);
+        svg.setAttribute("width", vb[2] * GRAPH_ZOOM);
+        svg.setAttribute("height", vb[3] * GRAPH_ZOOM);
+      }
+      // Re-render after a graph state change: in fullscreen rebuild just the graph (so it stays fullscreen),
+      // otherwise a full report draw.
+      function rerenderGraph() {
+        if (document.fullscreenElement) redrawGraphOnly();
+        else draw();
+      }
       // Re-render ONLY the graph SVG in place (keeps .graphwrap/.gscroll — so a fullscreened graph stays
       // fullscreen). Used for filter changes that alter the node set but shouldn't rebuild the whole report.
       function redrawGraphOnly() {
@@ -2665,68 +2653,57 @@
         const scroll = $("body").querySelector(".graphwrap .gscroll");
         if (!scroll || !STATE || !STATE._data) return;
         scroll.innerHTML = graphSvg(STATE._data.chains, STATE._data.chains.length);
-        const svg = scroll.querySelector("svg");
-        if (svg) {
-          const vb = (svg.getAttribute("viewBox") || "0 0 0 0").split(/\s+/).map(Number);
-          svg.setAttribute("width", vb[2] * GRAPH_ZOOM);
-          svg.setAttribute("height", vb[3] * GRAPH_ZOOM);
-        }
+        zoomGraph();
         wireGraphInteract();
         applySearch();
         applyHighlight();
         scrollHint(scroll);
       }
 
-      // The connected component containing `node`, computed from the full chain set (not the current view).
-      function componentOf(node) {
-        const adj = {};
-        const add = (a, b) => (adj[a] = adj[a] || []).push(b);
+      // Directed edges [downstream, upstream] across the full chain set (the graph's real connectivity).
+      function chainEdges() {
+        const out = [];
         for (const ch of (STATE && STATE._data && STATE._data.chains) || [])
-          for (let i = 1; i < ch.hops.length; i++) {
-            add(ch.hops[i - 1][0], ch.hops[i][0]);
-            add(ch.hops[i][0], ch.hops[i - 1][0]);
-          }
-        const seen = new Set([node]),
-          q = [node];
+          for (let i = 1; i < ch.hops.length; i++) out.push([ch.hops[i - 1][0], ch.hops[i][0]]);
+        return out;
+      }
+      // BFS over an adjacency map from `node`, into an existing `seen` set.
+      function bfs(adj, node, seen = new Set([node])) {
+        const q = [node];
         while (q.length) {
           const c = q.shift();
           for (const nb of adj[c] || []) if (!seen.has(nb)) (seen.add(nb), q.push(nb));
         }
         return seen;
       }
+      // The connected component containing `node` (undirected).
+      function componentOf(node) {
+        const adj = {};
+        for (const [f, t] of chainEdges()) {
+          (adj[f] = adj[f] || []).push(t);
+          (adj[t] = adj[t] || []).push(f);
+        }
+        return bfs(adj, node);
+      }
       // A node's "influence": only its ancestors (upstream) and descendants (downstream) — following edge
       // direction, so siblings/cousins are excluded. Used by single-clicking a node to highlight.
       function influenceOf(node) {
         const up = {},
           down = {};
-        const add = (m, a, b) => (m[a] = m[a] || []).push(b);
-        for (const ch of (STATE && STATE._data && STATE._data.chains) || [])
-          for (let i = 1; i < ch.hops.length; i++) {
-            const f = ch.hops[i - 1][0],
-              t = ch.hops[i][0]; // f (downstream) awaits t (upstream)
-            add(up, f, t); // upstream direction
-            add(down, t, f); // downstream direction
-          }
+        for (const [f, t] of chainEdges()) {
+          (up[f] = up[f] || []).push(t);
+          (down[t] = down[t] || []).push(f);
+        }
         const seen = new Set([node]);
-        const walk = (adj) => {
-          const q = [node];
-          while (q.length) {
-            const c = q.shift();
-            for (const nb of adj[c] || []) if (!seen.has(nb)) (seen.add(nb), q.push(nb));
-          }
-        };
-        walk(up); // all ancestors
-        walk(down); // all descendants
+        bfs(up, node, seen); // all ancestors
+        bfs(down, node, seen); // all descendants
         return seen;
       }
       // Focus a node's subtree: restrict the graph to its component (used by double-clicking a node).
       function focusSubtree(node) {
         GRAPH_FILTER = componentOf(node);
         GRAPH_HIGHLIGHT = null; // a plain focus has no in-component highlight
-        // In fullscreen, re-render only the graph so we don't tear down the fullscreened element; otherwise
-        // a full draw so the "show all nodes" bar (rendered outside the graph) appears.
-        if (document.fullscreenElement) redrawGraphOnly();
-        else draw();
+        rerenderGraph();
       }
 
       // Graph interaction (no dragging): click a node to highlight its influence, double-click to focus its
