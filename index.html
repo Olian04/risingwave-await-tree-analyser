@@ -2566,7 +2566,7 @@
             } else {
               SEARCH_OPEN = true;
             }
-            draw();
+            redrawGraphOnly(); // in-place: never rebuilds the report, so nothing outside the graph shifts
           };
         if (inp) {
           inp.focus();
@@ -2584,7 +2584,7 @@
             if (e.key === "Escape") {
               SEARCH_OPEN = false;
               SEARCH_Q = "";
-              draw();
+              redrawGraphOnly();
             }
           };
         }
@@ -2629,24 +2629,26 @@
         svg.setAttribute("width", vb[2] * GRAPH_ZOOM);
         svg.setAttribute("height", vb[3] * GRAPH_ZOOM);
       }
-      // Re-render after a graph state change: in fullscreen rebuild just the graph (so it stays fullscreen),
-      // otherwise a full report draw.
+      // Re-render after any graph-control state change (filter, scale, search, zoom-affecting redraw).
+      // Always an in-place graph refresh — never rebuilds the whole report — so the surrounding page never
+      // reflows and a fullscreened graph stays fullscreen.
       function rerenderGraph() {
-        if (document.fullscreenElement) redrawGraphOnly();
-        else draw();
+        redrawGraphOnly();
       }
-      // Re-render ONLY the graph SVG in place (keeps .graphwrap/.gscroll — so a fullscreened graph stays
-      // fullscreen). Used for filter changes that alter the node set but shouldn't rebuild the whole report.
+      // Rebuild the control bar + graph SVG inside the persistent .graphwrap element (its contents only —
+      // the .graphwrap node itself is never removed, so nothing outside it shifts). Reapplies the current
+      // zoom, search dimming and highlight so an in-place refresh looks identical to the prior state.
       function redrawGraphOnly() {
         const wrap = $("body").querySelector(".graphwrap");
         if (!wrap || !STATE || !STATE._data) return draw();
-        // Rebuild the control bar + graph inside the persistent .graphwrap (so the control bar reflects
-        // filter changes), without touching the rest of the report — keeps a fullscreened graph fullscreen.
         wrap.innerHTML =
           graphControls() + "<div class=gscroll>" + graphSvg(STATE._data.chains, STATE._data.chains.length) + "</div>";
         wireGraphInteract();
         wireGraphControls();
         wireScrollHints();
+        zoomGraph();
+        applySearch();
+        applyHighlight();
       }
       // Rebuild ONLY the graph svg (not the control bar) — used while typing a search so the query's
       // component filter re-lays-out the graph without stealing focus from the search input.
