@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>RisingWave await-tree report</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" />
     <style>
       :root {
         --bg: #0f1115;
@@ -305,6 +306,11 @@
         border-color: rgba(107, 114, 128, 0.5);
         color: var(--mut);
       }
+      .b-green {
+        background: rgba(87, 179, 104, 0.16);
+        border-color: rgba(87, 179, 104, 0.5);
+        color: var(--green);
+      }
       .chain {
         background: var(--panel);
         border: 1px solid var(--bd);
@@ -399,28 +405,141 @@
         padding: 0 4px;
       }
       .graphwrap {
-        overflow-x: auto;
+        position: relative;
         border: 1px solid var(--bd);
         border-radius: 10px;
         background: var(--panel);
-        padding: 14px;
         margin: 6px 0 4px;
       }
+      .gscroll {
+        overflow: auto;
+        max-height: 78vh;
+        padding: 14px;
+        border-radius: 10px;
+      }
+      .graphwrap:fullscreen {
+        max-height: none;
+        border-radius: 0;
+      }
+      .graphwrap:fullscreen .gscroll {
+        max-height: 100vh;
+        height: 100vh;
+      }
+      .gctrl {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        display: flex;
+        gap: 6px;
+        z-index: 6;
+      }
+      .gc-btn {
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        border: 1px solid var(--bd);
+        border-radius: 8px;
+        background: var(--panel2);
+        color: var(--tx);
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 13px;
+      }
+      .gc-btn:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      .gc-btn.gc-on {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      .gc-search {
+        display: flex;
+        align-items: center;
+      }
+      .gc-search.open {
+        background: var(--panel2);
+        border: 1px solid var(--bd);
+        border-radius: 8px;
+      }
+      .gc-search.open .gc-btn {
+        border: none;
+        background: transparent;
+        width: 30px;
+      }
+      .gc-input {
+        width: 160px;
+        background: transparent;
+        border: none;
+        outline: none;
+        color: var(--tx);
+        font-size: 13px;
+        padding: 0 2px 0 10px;
+      }
+      .gc-input::placeholder {
+        color: var(--mut);
+      }
+      .gnode.searchdim {
+        opacity: 0.1;
+      }
+      .gnode.searchhit rect {
+        stroke-width: 2.5px;
+      }
+      .gedge.searchdim {
+        opacity: 0.08;
+      }
+      .gnode.hldim {
+        opacity: 0.28;
+      }
+      .gedge.hldim {
+        opacity: 0.12;
+      }
+      .gnode.hlon rect {
+        stroke-width: 2.5px;
+        stroke-opacity: 1;
+      }
+      .gscroll {
+        cursor: grab;
+      }
+      .gscroll.panning {
+        cursor: grabbing;
+      }
+      .gscroll .gnode {
+        cursor: pointer;
+      }
+      h2 > i.fa-solid {
+        color: var(--accent);
+        font-size: 0.8em;
+        margin-right: 8px;
+        vertical-align: middle;
+      }
+      .card .k > i.fa-solid {
+        margin-right: 5px;
+        opacity: 0.7;
+      }
+      .badge > i.fa-solid {
+        font-size: 0.9em;
+        opacity: 0.9;
+      }
+      button > i.fa-solid {
+        margin-right: 5px;
+      }
+      .gc-btn > i.fa-solid {
+        margin: 0; /* icon-only control buttons: keep the glyph centred */
+      }
       #body svg text.nt {
-        fill: var(--tx);
+        fill: #e6e8ec; /* hardcoded (not var) so it still resolves inside the fullscreen top layer */
       }
       #body svg text.ns {
-        fill: var(--mut);
+        fill: #9aa3af;
       }
       #body svg text {
         user-select: none;
       }
       #body svg .gnode {
-        cursor: grab;
-        touch-action: none;
-      }
-      #body svg .gnode:active {
-        cursor: grabbing;
+        cursor: pointer;
       }
       .graphbar {
         display: flex;
@@ -430,19 +549,6 @@
       }
       .graphbar button {
         padding: 4px 10px;
-      }
-      .gtoggle {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        color: var(--mut);
-        font-size: 12px;
-        cursor: pointer;
-        user-select: none;
-      }
-      .gtoggle input {
-        margin: 0;
-        cursor: pointer;
       }
       .glegend {
         display: flex;
@@ -470,6 +576,14 @@
         color: var(--mut);
         background: var(--panel);
         border-style: dashed;
+      }
+      .morewrap {
+        display: block;
+        cursor: not-allowed;
+      }
+      button.more:disabled {
+        opacity: 0.45;
+        pointer-events: none;
       }
       button.more:hover {
         color: var(--tx);
@@ -657,13 +771,7 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 14px;
-        height: 14px;
-        border: 1px solid var(--bd);
-        border-radius: 50%;
-        font-size: 9px;
-        font-style: italic;
-        font-family: Georgia, "Times New Roman", serif;
+        font-size: 11px;
         color: var(--mut);
         cursor: help;
         vertical-align: middle;
@@ -671,8 +779,7 @@
       }
       .rootinfo:hover,
       .rootinfo:focus-visible {
-        color: var(--tx);
-        border-color: var(--accent);
+        color: var(--accent);
         outline: none;
       }
       #rootpop {
@@ -741,9 +848,9 @@
           <span class="fn" id="fn"></span>
           <span class="muted" id="summary"></span>
           <span class="spacer"></span>
-          <button id="dljson">Download JSON</button>
-          <button id="another">Load another</button>
-          <button id="exitdemo" hidden>Load your own dump →</button>
+          <button id="dljson"><i class="fa-solid fa-download"></i> Download JSON</button>
+          <button id="another"><i class="fa-solid fa-arrow-up-from-bracket"></i> Load another</button>
+          <button id="exitdemo" hidden><i class="fa-solid fa-arrow-up-from-bracket"></i> Load your own dump</button>
         </div>
       </div>
       <div class="wrap" id="body"></div>
@@ -769,12 +876,31 @@
       const CAT_COLOUR = {
         Source: "amber",
         wait_pending_fetch_block: "red",
+        fetch_meta: "green",
         receive_barrier: "blue",
         "Wait For New Buffer Item": "teal",
         UpstreamSinkUnion: "purple",
         input: "gray",
         DynamicFilter: "gray",
         Now: "gray",
+      };
+      // Font Awesome icon per await category — gives each badge/legend swatch a glyph so the meaning reads
+      // at a glance (ingestion, storage, metadata, barrier, starved sink, sink-union, upstream input).
+      const CAT_ICON = {
+        Source: "fa-satellite-dish",
+        wait_pending_fetch_block: "fa-database",
+        fetch_meta: "fa-table-list",
+        receive_barrier: "fa-flag-checkered",
+        "Wait For New Buffer Item": "fa-faucet-drip",
+        UpstreamSinkUnion: "fa-code-merge",
+        input: "fa-arrow-right-to-bracket",
+      };
+      // Friendly label per category — the SAME wording the graph legend uses, so badges read consistently.
+      const CAT_LABEL = {
+        wait_pending_fetch_block: "storage fetch",
+        fetch_meta: "metadata fetch",
+        "Wait For New Buffer Item": "starved sink",
+        input: "waiting on input",
       };
       // Reader-facing description per root-await category, shown in the (i) popover on each root row.
       // Single source of truth for what an await point / root await means. Shared by the "Await roots"
@@ -806,6 +932,8 @@
         wait_pending_fetch_block:
           "Reading a data block from the state store — a cache miss fetching from object storage (S3).",
         wait_epoch: "Waiting for the state store to make a committed epoch readable.",
+        fetch_meta:
+          "Fetching table metadata (the Hummock version / SST object metadata) before reading rows — a catalog/metadata lookup, distinct from fetching the data blocks themselves.",
         may_exist: "Checking the state store for a key (bloom-filter / block lookup).",
         iter: "Scanning a range from the state store (object storage / cache).",
         get: "Point-looking-up a key in the state store (object storage / cache).",
@@ -864,7 +992,7 @@
       function infoIcon(label) {
         const desc = describeAwait(label);
         return desc
-          ? ` <span class=rootinfo tabindex=0 role=button aria-label="What “${esc(label)}” means" data-desc="${esc(desc)}">i</span>`
+          ? ` <span class=rootinfo tabindex=0 role=button aria-label="What “${esc(label)}” means" data-desc="${esc(desc)}"><i class="fa-solid fa-circle-info"></i></span>`
           : "";
       }
 
@@ -1278,7 +1406,11 @@
         );
       }
       function badge(cat) {
-        return `<span class="badge b-${CAT_COLOUR[cat] || "gray"}">${esc(cat)}</span>`;
+        const base = cat.replace(/ \(idle\)$/, ""),
+          idle = base !== cat;
+        const ic = CAT_ICON[base] ? `<i class="fa-solid ${CAT_ICON[base]}"></i> ` : "";
+        const label = (CAT_LABEL[base] || base) + (idle ? " (idle)" : "");
+        return `<span class="badge b-${CAT_COLOUR[base] || "gray"}">${ic}${esc(label)}</span>`;
       }
       function nf(n) {
         return n.toLocaleString("en-US");
@@ -1309,7 +1441,7 @@
         m.get(k).push(v);
       }
       function info(htmlStr) {
-        return `<details class=info><summary>ⓘ How to read this</summary><div class=ibody>${htmlStr}</div></details>`;
+        return `<details class=info><summary><i class="fa-solid fa-circle-info"></i> How to read this</summary><div class=ibody>${htmlStr}</div></details>`;
       }
 
       // per-section "show more" state — each section starts small and expands independently
@@ -1336,7 +1468,7 @@
       function moreBtn(key, total) {
         const shown = SHOWN[key] || 0;
         if (effShown(key, total) >= total) return "";
-        return `<button class=more data-sec="${key}">Show more… (${total - shown} more)</button>`;
+        return `<button class=more data-sec="${key}"><i class="fa-solid fa-chevron-down"></i> Show more (${total - shown} more)</button>`;
       }
 
       // ---- sortable + filterable tables ----
@@ -1400,331 +1532,50 @@
       }
 
       const GNODE_W = 182,
-        GNODE_H = 44,
-        GCOL_W = 232,
-        GROW_H = 66; // shared by graphSvg and the drag handler
-      // Smooth curve through a list of [x,y] waypoints (source-right, any dummy centres, target-left).
-      // Each segment is a cubic with HORIZONTAL tangents at both ends, so within the segment the curve
-      // stays inside the [x0..x1] × [y0..y1] box of its two waypoints (the y-component is a monotone
-      // smoothstep — no overshoot). The layout drops the waypoints in the clear channels between nodes,
-      // so the curve snakes between them and never bulges across a node.
-      function edgePath(pts, cap = Infinity) {
+        GNODE_H = 44;
+      // Smooth curve through a list of [x,y] waypoints (source-right, dummy centres, target-left). Each
+      // segment is a cubic with HORIZONTAL tangents at both ends, so it stays inside its two waypoints'
+      // box (a monotone smoothstep — no overshoot). The layout drops the waypoints in the clear channels
+      // between nodes, so the curve snakes between them and never bulges across a node.
+      function edgePath(pts) {
         let d = `M${pts[0][0]},${pts[0][1]}`;
         for (let i = 1; i < pts.length; i++) {
           const [x0, y0] = pts[i - 1],
-            [x1, y1] = pts[i];
-          // horizontal tangent length; capping it keeps long segments close to the straight line (used by
-          // the grid router, whose straight runs are already node-clear so the curve mustn't bow off them)
-          const dx = Math.sign(x1 - x0) * Math.min(Math.abs(x1 - x0) * 0.5, cap);
+            [x1, y1] = pts[i],
+            dx = (x1 - x0) * 0.5;
           d += ` C${x0 + dx},${y0} ${x1 - dx},${y1} ${x1},${y1}`;
         }
         return d;
       }
-      // Smooth a waypoint polyline into ONE C1-continuous cubic spline (Catmull–Rom → Bézier). Tangents at
-      // interior points follow the path (so H→V corners round off instead of kinking — no 90° joints), and
-      // are clamped to 45% of the neighbouring segment so the curve can't overshoot off the cleared path.
-      // The endpoints leave/enter horizontally in the flow direction `dir` (+1 = rightward, -1 = leftward),
-      // which keeps the edge from starting off backwards when its node is dragged past the other one.
-      function smoothPath(pts, dir) {
-        const P = pts,
-          n = P.length;
-        if (n === 2) {
-          const m = Math.max(20, Math.abs(P[1][0] - P[0][0]) * 0.4);
-          return `M${P[0][0]},${P[0][1]} C${P[0][0] + dir * m},${P[0][1]} ${P[1][0] - dir * m},${P[1][1]} ${P[1][0]},${P[1][1]}`;
-        }
-        const em = 34,
-          T = new Array(n);
-        T[0] = [dir * em, 0];
-        T[n - 1] = [dir * em, 0];
-        for (let i = 1; i < n - 1; i++) {
-          let tx = (P[i + 1][0] - P[i - 1][0]) * 0.5,
-            ty = (P[i + 1][1] - P[i - 1][1]) * 0.5;
-          const dPrev = Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]);
-          const dNext = Math.hypot(P[i + 1][0] - P[i][0], P[i + 1][1] - P[i][1]);
-          const arm = Math.hypot(tx, ty) / 3,
-            maxArm = 0.45 * Math.min(dPrev, dNext);
-          if (arm > maxArm && arm > 0) {
-            const s = maxArm / arm;
-            tx *= s;
-            ty *= s;
-          }
-          T[i] = [tx, ty];
-        }
-        let d = `M${P[0][0]},${P[0][1]}`;
-        for (let i = 0; i < n - 1; i++) {
-          const c1x = P[i][0] + T[i][0] / 3,
-            c1y = P[i][1] + T[i][1] / 3;
-          const c2x = P[i + 1][0] - T[i + 1][0] / 3,
-            c2y = P[i + 1][1] - T[i + 1][1] / 3;
-          d += ` C${c1x},${c1y} ${c2x},${c2y} ${P[i + 1][0]},${P[i + 1][1]}`;
-        }
-        return d;
+      let GRAPH_FILTER = null; // node names the graph is restricted to (subtree focus), or null
+      let GRAPH_HIGHLIGHT = null; // node names to spotlight (clicked node); others dimmed
+      let EDGE_SCALE = "abs"; // edge colour/width scale: "abs" (0..10s fixed) or "rel" (0..max-in-view)
+      let GRAPH_ZOOM = 1; // graph zoom factor (control bar); applied to the svg's width/height
+      let SEARCH_OPEN = false; // is the node-search control expanded into an input?
+      let SEARCH_Q = ""; // current node-search query
+      let SUPPRESS_CLICK = false; // set after a pan drag so the trailing click doesn't clear/highlight
+
+      // Control bar shown at the top-right of the graph: search, full screen, zoom in/out, reset zoom.
+      // The search control is a square button that expands into a rectangle (input + clear button) when open.
+      function graphControls() {
+        const searchIcon = SEARCH_OPEN ? "fa-xmark" : "fa-magnifying-glass";
+        return (
+          "<div class=gctrl>" +
+          (GRAPH_FILTER
+            ? '<button class=gc-btn id=gc-showall title="Show all nodes (clear focus)"><i class="fa-solid fa-eye"></i></button>'
+            : "") +
+          `<div class="gc-search${SEARCH_OPEN ? " open" : ""}">` +
+          (SEARCH_OPEN ? `<input id=gc-input class=gc-input type=text placeholder="Search node" value="${esc(SEARCH_Q)}" />` : "") +
+          `<button class=gc-btn id=gc-searchbtn title="${SEARCH_OPEN ? "Clear search" : "Search node"}"><i class="fa-solid ${searchIcon}"></i></button>` +
+          "</div>" +
+          `<button class="gc-btn${EDGE_SCALE === "rel" ? " gc-on" : ""}" id=gc-scale title="Edge colour scale: ${EDGE_SCALE === "rel" ? "relative (0 → busiest edge)" : "absolute (0 → 10s)"} — click to toggle"><i class="fa-solid fa-ruler-horizontal"></i></button>` +
+          '<button class=gc-btn id=gc-fs title="Full screen"><i class="fa-solid fa-expand"></i></button>' +
+          '<button class=gc-btn id=gc-zin title="Zoom in"><i class="fa-solid fa-plus"></i></button>' +
+          '<button class=gc-btn id=gc-zout title="Zoom out"><i class="fa-solid fa-minus"></i></button>' +
+          '<button class=gc-btn id=gc-zreset title="Reset zoom"><i class="fa-solid fa-arrows-rotate"></i></button>' +
+          "</div>"
+        );
       }
-      // Nearest y to `desired` whose horizontal line clears every occupied [top,bottom] interval by `pad`.
-      function clearY(occ, desired, pad) {
-        const bad = (y) => occ.some(([t, b]) => y > t - pad && y < b + pad);
-        if (!bad(desired)) return desired;
-        let best = desired,
-          bd = Infinity;
-        for (const [t, b] of occ)
-          for (const c of [t - pad, b + pad])
-            if (!bad(c)) {
-              const dd = Math.abs(c - desired);
-              if (dd < bd) {
-                bd = dd;
-                best = c;
-              }
-            }
-        return best;
-      }
-      // True if the straight segment A→B clears every column's nodes (by `pad`) over the x-range it spans.
-      function segClear(A, B, colRanks, L, pad) {
-        const dx = B[0] - A[0] || 1;
-        const yAt = (x) => A[1] + (B[1] - A[1]) * ((x - A[0]) / dx);
-        const xlo = Math.min(A[0], B[0]),
-          xhi = Math.max(A[0], B[0]);
-        for (const c of colRanks) {
-          const xL = L.PADX + c * L.COLW,
-            xR = xL + L.NW;
-          if (xR <= xlo || xL >= xhi) continue; // column not under this segment
-          const a = Math.max(xL, xlo),
-            b = Math.min(xR, xhi);
-          const y0 = yAt(a),
-            y1 = yAt(b),
-            lo = Math.min(y0, y1),
-            hi = Math.max(y0, y1);
-          for (const [t, bb] of L.colNodes[c] || []) if (hi > t - pad && lo < bb + pad) return false;
-        }
-        return true;
-      }
-      // Route one edge from src (source right-edge) to tgt (target left-edge). Give every spanned column a
-      // candidate waypoint in the clear gap nearest the straight src→tgt trend, then keep only the ones a
-      // straight bypass can't skip without hitting a node (greedy furthest-reachable / line-of-sight). So a
-      // waypoint that's become an unnecessary detour — e.g. once the dragged start moves vertically past it —
-      // is dropped, while any waypoint still needed to clear a node stays. Recomputed from the live endpoints,
-      // so it reflows during a drag and never crosses a node. Used by both the render and the drag handler.
-      function routeCols(src, tgt, colRanks, L) {
-        const pad = L.NH / 2 + 8;
-        // Only route through columns still horizontally between the endpoints. Once the dragged start (or
-        // target) moves past a column's x, that column's waypoint is behind the flow and is dropped — the
-        // horizontal analogue of the vertical detour rule.
-        const lo = Math.min(src[0], tgt[0]),
-          hi = Math.max(src[0], tgt[0]);
-        const cols = colRanks.filter((c) => {
-          const xL = L.PADX + c * L.COLW;
-          return xL >= lo && xL + L.NW <= hi;
-        });
-        const span = tgt[0] - src[0] || 1;
-        const raw = cols.map((c) => {
-          const xL = L.PADX + c * L.COLW,
-            xR = xL + L.NW;
-          const f = Math.max(0, Math.min(1, (xL + L.NW / 2 - src[0]) / span));
-          const y = clearY(L.colNodes[c] || [], src[1] + (tgt[1] - src[1]) * f, pad);
-          return { xL, xR, y };
-        });
-        // stops the path may visit, in order: the source, each column's candidate waypoint, the target
-        const stops = [{ x: src[0], y: src[1], wp: null }];
-        for (const w of raw) stops.push({ x: w.xL, y: w.y, wp: w });
-        stops.push({ x: tgt[0], y: tgt[1], wp: null });
-        const kept = [0];
-        let i = 0;
-        while (i < stops.length - 1) {
-          let j = i + 1; // extend as far as a straight segment stays clear
-          for (let k = i + 2; k < stops.length; k++) {
-            if (segClear([stops[i].x, stops[i].y], [stops[k].x, stops[k].y], cols, L, pad)) j = k;
-            else break;
-          }
-          kept.push(j);
-          i = j;
-        }
-        const pts = [src];
-        for (const idx of kept) {
-          const st = stops[idx];
-          if (st.wp) pts.push([st.wp.xL, st.wp.y], [st.wp.xR, st.wp.y]); // horizontal traverse across the clear slot
-        }
-        pts.push(tgt);
-        return pts;
-      }
-      // ===== Experimental grid router (toggle above the graph) =========================================
-      // Overlay a coarse grid on the drawing; any cell covered by a node (padded) is blocked. Route each
-      // edge from the source's right edge to the target's left edge with A* through free cells, then pull
-      // the cell path straight (line-of-sight) into a few waypoints. Waypoints can sit anywhere a cell is
-      // free, so — unlike the column router — edges can weave around a node the user has dragged anywhere.
-      const GRID_CW = 26,
-        GRID_CH = 13,
-        GRID_PAD = 5;
-      function buildGrid(rects, W, H) {
-        const cw = GRID_CW,
-          ch = GRID_CH,
-          cols = Math.max(1, Math.ceil(W / cw) + 1),
-          rows = Math.max(1, Math.ceil(H / ch) + 1);
-        const blocked = new Uint8Array(cols * rows);
-        for (const r of rects) {
-          const ci0 = Math.max(0, Math.floor((r[0] - GRID_PAD) / cw)),
-            ci1 = Math.min(cols - 1, Math.floor((r[2] + GRID_PAD) / cw));
-          const ri0 = Math.max(0, Math.floor((r[1] - GRID_PAD) / ch)),
-            ri1 = Math.min(rows - 1, Math.floor((r[3] + GRID_PAD) / ch));
-          for (let ci = ci0; ci <= ci1; ci++) for (let ri = ri0; ri <= ri1; ri++) blocked[ri * cols + ci] = 1;
-        }
-        return { cw, ch, cols, rows, blocked };
-      }
-      function gridRoute(src, tgt, sRect, tRect, G) {
-        if (!G) return [src, tgt];
-        const { cw, ch, cols, rows, blocked } = G,
-          N = cols * rows;
-        const cl = (v, hi) => (v < 0 ? 0 : v > hi ? hi : v);
-        const sci = cl(Math.floor(src[0] / cw), cols - 1),
-          sri = cl(Math.floor(src[1] / ch), rows - 1);
-        const gci = cl(Math.floor(tgt[0] / cw), cols - 1),
-          gri = cl(Math.floor(tgt[1] / ch), rows - 1);
-        // Confine the search to the horizontal band between the two nodes: a waypoint can only sit between
-        // source and target (never left of the source's front nor right of the target's back), which is
-        // what stops edges from doubling back on themselves.
-        let loCol = Math.min(sci, gci),
-          hiCol = Math.max(sci, gci);
-        // margin lets the path step through the padded moat around its OWN two nodes (otherwise a node's
-        // own GRID_PAD ring seals its border cells and A* can't leave the source / reach the target)
-        const M = GRID_PAD + Math.max(cw, ch);
-        const inR = (x, y, R) => R && x >= R[0] - M && x <= R[2] + M && y >= R[1] - M && y <= R[3] + M;
-        const pass = (ci, ri) => {
-          if (ci < loCol || ci > hiCol || ri < 0 || ri >= rows) return false;
-          if (!blocked[ri * cols + ci]) return true;
-          const cx = (ci + 0.5) * cw,
-            cy = (ri + 0.5) * ch; // a blocked cell is still usable if it's in the moat around our own nodes
-          return inR(cx, cy, sRect) || inR(cx, cy, tRect);
-        };
-        const start = sri * cols + sci,
-          goal = gri * cols + gci;
-        const g = new Float64Array(N),
-          came = new Int32Array(N);
-        const heap = [];
-        const push = (f, i) => {
-          heap.push([f, i]);
-          let k = heap.length - 1;
-          while (k > 0) {
-            const p = (k - 1) >> 1;
-            if (heap[p][0] <= heap[k][0]) break;
-            [heap[p], heap[k]] = [heap[k], heap[p]];
-            k = p;
-          }
-        };
-        const pop = () => {
-          const top = heap[0],
-            last = heap.pop();
-          if (heap.length) {
-            heap[0] = last;
-            let k = 0;
-            for (;;) {
-              let l = 2 * k + 1,
-                r = 2 * k + 2,
-                m = k;
-              if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
-              if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
-              if (m === k) break;
-              [heap[m], heap[k]] = [heap[k], heap[m]];
-              k = m;
-            }
-          }
-          return top;
-        };
-        const hEst = (i) => {
-          const dx = Math.abs((i % cols) - gci),
-            dy = Math.abs(((i / cols) | 0) - gri);
-          return dx + dy + (Math.SQRT2 - 2) * Math.min(dx, dy);
-        };
-        const DIRS = [
-          [1, 0],
-          [-1, 0],
-          [0, 1],
-          [0, -1],
-          [1, 1],
-          [1, -1],
-          [-1, 1],
-          [-1, -1],
-        ];
-        const search = () => {
-          g.fill(Infinity);
-          came.fill(-1);
-          heap.length = 0;
-          g[start] = 0;
-          push(hEst(start), start);
-          while (heap.length) {
-            const [f, cur] = pop();
-            if (cur === goal) return true;
-            if (f - 1e-6 > g[cur] + hEst(cur)) continue; // stale heap entry
-            const ci = cur % cols,
-              ri = (cur / cols) | 0;
-            const pci = came[cur] >= 0 ? came[cur] % cols : ci,
-              pri = came[cur] >= 0 ? (came[cur] / cols) | 0 : ri;
-            const pdx = Math.sign(ci - pci),
-              pdy = Math.sign(ri - pri);
-            for (const [dx, dy] of DIRS) {
-              const nci = ci + dx,
-                nri = ri + dy;
-              if (!pass(nci, nri)) continue;
-              if (dx && dy && (!pass(ci + dx, ri) || !pass(ci, ri + dy))) continue; // no corner cutting
-              const nidx = nri * cols + nci;
-              const turn = came[cur] >= 0 && (pdx !== dx || pdy !== dy) ? 0.8 : 0; // discourage zig-zags
-              const ng = g[cur] + (dx && dy ? Math.SQRT2 : 1) + turn;
-              if (ng < g[nidx]) {
-                g[nidx] = ng;
-                came[nidx] = cur;
-                push(ng + hEst(nidx), nidx);
-              }
-            }
-          }
-          return false;
-        };
-        let found = search();
-        if (!found) {
-          // No clear path inside the band — relax the horizontal confinement and retry on the full width.
-          // A small backward jog is a better outcome than cutting straight through a node.
-          loCol = 0;
-          hiCol = cols - 1;
-          found = search();
-        }
-        if (!found) return [src, tgt];
-        const cells = [];
-        for (let c = goal; c >= 0; c = came[c]) cells.push(c);
-        cells.reverse();
-        const ctr = (i) => [((i % cols) + 0.5) * cw, (((i / cols) | 0) + 0.5) * ch];
-        const path = cells.map(ctr);
-        // Douglas–Peucker: drop any waypoint within EPS of the line through its neighbours, so long straight
-        // runs collapse to a single cubic (just start+end control points) and only genuine bends keep a
-        // point. EPS stays below the node clearance, so the simplified polyline still hugs the clear path.
-        const EPS = 6;
-        const perp = (p, a, b) => {
-          const dx = b[0] - a[0],
-            dy = b[1] - a[1],
-            L2 = dx * dx + dy * dy;
-          if (!L2) return Math.hypot(p[0] - a[0], p[1] - a[1]);
-          let u = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2;
-          u = u < 0 ? 0 : u > 1 ? 1 : u;
-          return Math.hypot(p[0] - (a[0] + u * dx), p[1] - (a[1] + u * dy));
-        };
-        const rdp = (pl) => {
-          if (pl.length < 3) return pl;
-          let dmax = 0,
-            idx = 0;
-          for (let i = 1; i < pl.length - 1; i++) {
-            const d = perp(pl[i], pl[0], pl[pl.length - 1]);
-            if (d > dmax) {
-              dmax = d;
-              idx = i;
-            }
-          }
-          return dmax > EPS ? rdp(pl.slice(0, idx + 1)).slice(0, -1).concat(rdp(pl.slice(idx))) : [pl[0], pl[pl.length - 1]];
-        };
-        const simp = rdp(path);
-        return [src, ...simp.slice(1, -1), tgt];
-      }
-      let GRID_ROUTING = false; // experimental grid router on/off (toggled above the graph)
-      let GRAPH_LAYOUT = null; // last render's geometry {PADX,COLW,NW,NH,colNodes,nodeRank,W,H,rects,grid}
-      let LAYOUT = "planar"; // "planar" | "custom"  (severity layout deprecated)
-      let CUSTOM_POS = {}; // node name -> [x,y] in custom mode
-      let GRAPH_FILTER = null; // Set of node names to restrict the graph to (subtree focus), or null
-      let GRAPH_HIGHLIGHT = null; // Set of node names to spotlight (clicked chain/node); others dimmed
-      let LAST_TAP = { node: null, t: 0 }; // module-scoped so it survives the redraw a single tap triggers
 
       function graphSvg(chains, limit) {
         if (!chains.length) return "<p class=note>No chains to graph.</p>";
@@ -1948,13 +1799,7 @@
             const v = vnode.get(id);
             dpos.set(id, { xl: colX(v.rank), xr: colX(v.rank) + NW, y: PADY + yc.get(id) + NH / 2 });
           }
-        // A node the user has dragged keeps its manual position; everything else stays where the layout
-        // put it. (Applied unconditionally so a re-render matches exactly what drag drew — no jump.)
-        for (const n of nodes.keys()) {
-          const c = CUSTOM_POS[n];
-          if (c) posDraw.set(n, { x: c[0], y: c[1] });
-        }
-        // Bounds first — the experimental grid needs them.
+        // Layout bounds.
         let W = 0,
           H = 0;
         for (const p of posDraw.values()) {
@@ -1963,52 +1808,11 @@
         }
         W += PADX;
         H += PADY;
-        // Geometry the drag handler needs to reflow edges live: each column's real-node y-intervals, every
-        // node's rank, the node rectangles, and (only when the experimental router is on) a blocked-cell
-        // grid. Rebuilt every render so it always reflects the current node positions.
-        const colNodes = {},
-          nodeRank = {},
-          rectByName = {},
-          rects = [];
-        for (const n of nodes.keys()) {
-          const r = rank.get(n),
-            p = posDraw.get(n),
-            rc = [p.x, p.y, p.x + NW, p.y + NH];
-          nodeRank[n] = r;
-          rectByName[n] = rc;
-          rects.push(rc);
-          (colNodes[r] || (colNodes[r] = [])).push([p.y, p.y + NH]);
-        }
-        for (const r in colNodes) colNodes[r].sort((x, y) => x[0] - y[0]);
-        const L = { PADX, COLW, NW, NH, colNodes, nodeRank, W, H, rects, rectByName };
-        const dragged = Object.keys(CUSTOM_POS);
-        // The grid backs the experimental router, and also lets the planar router re-route around nodes the
-        // user has dragged — the column router assumes nodes sit in their ranks, which dragging breaks.
-        L.grid = GRID_ROUTING || dragged.length ? buildGrid(rects, W, H) : null;
-        GRAPH_LAYOUT = L;
         let s = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role=img aria-label="Backpressure chain graph">`;
-        // Position-aware A* routing (experimental router, and any planar edge a drag has disturbed): connect
-        // from the facing sides and smooth with direction-aware endpoints.
-        const gridEdge = (f, t) => {
-          const rf = L.rectByName[f],
-            rt = L.rectByName[t];
-          const dir = (rt[0] + rt[2]) / 2 >= (rf[0] + rf[2]) / 2 ? 1 : -1;
-          const gs = dir > 0 ? [rf[2], (rf[1] + rf[3]) / 2] : [rf[0], (rf[1] + rf[3]) / 2];
-          const gt = dir > 0 ? [rt[0], (rt[1] + rt[3]) / 2] : [rt[2], (rt[1] + rt[3]) / 2];
-          return smoothPath(gridRoute(gs, gt, rf, rt, L.grid), dir);
-        };
-        const hitsDragged = (pts) => {
-          for (const dn of dragged) {
-            const r = L.rectByName[dn];
-            for (let i = 1; i < pts.length; i++)
-              for (let u = 0; u <= 24; u++) {
-                const x = pts[i - 1][0] + ((pts[i][0] - pts[i - 1][0]) * u) / 24,
-                  y = pts[i - 1][1] + ((pts[i][1] - pts[i - 1][1]) * u) / 24;
-                if (x > r[0] - 2 && x < r[2] + 2 && y > r[1] - 2 && y < r[3] + 2) return true;
-              }
-          }
-          return false;
-        };
+        // Edge colour/width scale denominator: fixed 10s (absolute) or the busiest edge in the whole report
+        // (relative). "chains" is the full report set, so the relative max is report-wide, not view-local.
+        const reportEdgeMax = Math.max(1e-6, ...chains.flatMap((c) => c.hops.map((h) => h[1])));
+        const edgeMax = EDGE_SCALE === "rel" ? reportEdgeMax : EDGE_MAX_S;
         // Edges: curve from the source's right edge, horizontally across each dummy's clear column slot, to
         // the target's left edge — vertical moves land in the channels, so the curve snakes between nodes.
         for (const [k, w] of edges) {
@@ -2016,37 +1820,24 @@
           if (!posDraw.get(f) || !posDraw.get(t)) continue;
           const a = posDraw.get(f),
             b = posDraw.get(t);
-          const src = [a.x + NW, a.y + NH / 2],
-            tgt = [b.x, b.y + NH / 2];
-          let dstr;
-          if (GRID_ROUTING || (dragged.length && (CUSTOM_POS[f] || CUSTOM_POS[t]))) {
-            // experimental router, or a planar edge whose own endpoint was dragged — route position-aware
-            dstr = gridEdge(f, t);
-          } else {
-            const via = [];
-            for (const id of routes.get(k) || []) {
-              const d = dpos.get(id);
-              if (d) via.push([d.xl, d.y], [d.xr, d.y]);
-            }
-            const pts = [src, ...via, tgt];
-            // if a dragged node has landed on this otherwise-untouched edge, re-route around the obstacles
-            dstr = dragged.length && hitsDragged(pts) ? gridEdge(f, t) : edgePath(pts);
+          const via = [];
+          for (const id of routes.get(k) || []) {
+            const d = dpos.get(id);
+            if (d) via.push([d.xl, d.y], [d.xr, d.y]);
           }
-          const t01 = Math.min(w / EDGE_MAX_S, 1); // colour/width on an ABSOLUTE 0..10s scale, not relative to max
+          const pts = [[a.x + NW, a.y + NH / 2], ...via, [b.x, b.y + NH / 2]];
+          const t01 = Math.min(w / edgeMax, 1); // colour/width on the chosen scale (abs 10s or relative max)
           const sw = (1.2 + 5 * t01).toFixed(1);
-          const eop = GRAPH_HIGHLIGHT && !(GRAPH_HIGHLIGHT.has(f) && GRAPH_HIGHLIGHT.has(t)) ? 0.1 : 0.85;
-          s += `<path class=gedge data-from="${esc(f)}" data-to="${esc(t)}" d="${dstr}" fill=none stroke="${edgeColor(t01)}" stroke-opacity="${eop}" stroke-width=${sw}><title>${esc(f)} → ${esc(t)}: ${w.toFixed(2)}s</title></path>`;
+          s += `<path class=gedge data-from="${esc(f)}" data-to="${esc(t)}" d="${edgePath(pts)}" fill=none stroke="${edgeColor(t01)}" stroke-opacity="0.85" stroke-width=${sw}><title>${esc(f)} → ${esc(t)}: ${w.toFixed(2)}s</title></path>`;
         }
         for (const [n, nd] of nodes) {
           const p = posDraw.get(n),
             hex = catHex(nd.cat);
           const disp = n.length > 24 ? n.slice(0, 23) + "…" : n;
-          const hlOn = GRAPH_HIGHLIGHT && GRAPH_HIGHLIGHT.has(n); // spotlighted (in the selected chain)
-          const dim = GRAPH_HIGHLIGHT && !GRAPH_HIGHLIGHT.has(n); // fade the rest
           s +=
-            `<g class=gnode data-node="${esc(n)}" data-x="${p.x}" data-y="${p.y}" transform="translate(${p.x},${p.y})"${dim ? ' opacity="0.28"' : ""}>` +
+            `<g class=gnode data-node="${esc(n)}" data-x="${p.x}" data-y="${p.y}" transform="translate(${p.x},${p.y})">` +
             `<title>${esc(n)} — ${esc(nd.cat)} · ${nd.wait.toFixed(2)}s</title>` +
-            `<rect x=0 y=0 width=${NW} height=${NH} rx=8 fill="${hex}${hlOn ? "3a" : "22"}" stroke="${hex}" stroke-opacity="${hlOn ? 1 : 0.75}" stroke-width="${hlOn ? 2.5 : 1}"/>` +
+            `<rect x="0" y="0" width="${NW}" height="${NH}" rx="8" fill="${hex}22" stroke="${hex}" stroke-opacity="0.75" stroke-width="1" />` +
             `<text class=nt x=11 y=18 font-size=12>${esc(disp)}</text>` +
             `<text class=ns x=11 y=34 font-size=11>${esc(nd.cat)} · ${nd.wait.toFixed(2)}s</text>` +
             `</g>`;
@@ -2060,21 +1851,27 @@
         if (!total) return "<p>No actors parsed. If this is a dump with a non-standard format, check the console.</p>";
         const s = data.wait_stats;
         const out = [];
+        const h2 = (ic, t) => `<h2><i class="fa-solid ${ic}"></i> ${t}</h2>`;
         const cards = [
-          ["Actors", nf(total)],
-          ["True-wait median", s.median.toFixed(2) + "s"],
-          ["p99", s.p99.toFixed(2) + "s"],
-          ["max", s.max.toFixed(2) + "s"],
-          ["Stuck ≥ 10s", nf(data.stuck_count)],
-          ["Actors w/ idle span", nf(data.idle.with_idle)],
+          ["Actors", nf(total), "fa-diagram-project"],
+          ["True-wait median", s.median.toFixed(2) + "s", "fa-clock"],
+          ["p99", s.p99.toFixed(2) + "s", "fa-gauge-high"],
+          ["max", s.max.toFixed(2) + "s", "fa-stopwatch"],
+          ["Stuck ≥ 10s", nf(data.stuck_count), "fa-triangle-exclamation"],
+          ["Actors w/ idle span", nf(data.idle.with_idle), "fa-hourglass-half"],
         ];
         out.push(
           "<div class=cards>" +
-            cards.map(([k, v]) => `<div class=card><div class=k>${k}</div><div class=v>${v}</div></div>`).join("") +
+            cards
+              .map(
+                ([k, v, ic]) =>
+                  `<div class=card><div class=k><i class="fa-solid ${ic}"></i> ${k}</div><div class=v>${v}</div></div>`,
+              )
+              .join("") +
             "</div>",
         );
 
-        out.push("<h2>Await roots — where each actor bottoms out</h2>");
+        out.push(h2("fa-anchor", "Await roots — where each actor bottoms out"));
         out.push("<p class=sub>Each actor traced upstream to what it ultimately waits on.</p>");
         out.push(
           info(
@@ -2094,7 +1891,7 @@
             "</tbody></table>",
         );
 
-        out.push("<h2>Primary await-point (all actors)</h2>");
+        out.push(h2("fa-hourglass-half", "Primary await-point (all actors)"));
         out.push(
           info(
             "What actors are <b>directly</b> blocked on right now (one hop — not traced to root). <b>RemoteInput/LocalInput</b> = waiting for data from an upstream actor (normal idling or backpressure); <b>Source</b> = ingestion; <b>Wait For New Buffer Item</b> = a starved sink; <b>receive_barrier</b> = awaiting the barrier. Lots of input-waiting is expected — the roots section above is what tells you the underlying cause.",
@@ -2125,34 +1922,41 @@
           ),
         );
 
-        out.push("<h2>Longest await chains</h2>");
+        out.push(h2("fa-diagram-project", "Longest await chains"));
         out.push(
           info(
-            "A graph of the chains with the longest waits. Each <b>node</b> is a pipeline; an <b>edge</b> connects a downstream pipeline to the upstream one it awaits — downstream on the left, roots on the right. An edge’s <b>thickness and colour</b> show the wait time on a fixed scale (0s cool/thin → 10s+ red/thick), so a healthy graph stays cool. Root nodes on the right are where each chain bottoms out, coloured by what they await; <b>fan-in</b> onto one node marks a shared upstream. Controls: <b>drag</b> a node to move it; <b>click</b> a node to highlight its influence (everything up- and downstream of it); <b>double-click</b> a node to filter the graph to just its connected component; click the empty background to clear a highlight. Hover a node/edge for exact values.",
+            "A graph of the chains with the longest waits. Each <b>node</b> is a pipeline; an <b>edge</b> connects a downstream pipeline to the upstream one it awaits — downstream on the left, roots on the right. An edge’s <b>thickness and colour</b> show the wait time on a fixed scale (0s cool/thin → 10s+ red/thick), so a healthy graph stays cool. Root nodes on the right are where each chain bottoms out, coloured by what they await; <b>fan-in</b> onto one node marks a shared upstream. Controls: <b>click</b> a node to highlight its influence (everything up- and downstream of it); <b>double-click</b> a node to filter the graph to just its connected component; click the empty background to clear a highlight. Hover a node/edge for exact values.",
           ),
         );
         out.push(
-          "<div class=graphbar>" +
-            `<label class=gtoggle><input type=checkbox id=gridtoggle${GRID_ROUTING ? " checked" : ""}> experimental grid routing</label>` +
-            (GRAPH_FILTER || GRAPH_HIGHLIGHT
-              ? "<button id=gfilterclear>" + (GRAPH_FILTER ? "show all nodes" : "clear highlight") + "</button>"
-              : "") +
-            "</div>",
+          "<div class=graphwrap>" +
+            graphControls() +
+            "<div class=gscroll>" +
+            graphSvg(data.chains, effShown("graph", data.chains.length)) +
+            "</div></div>",
         );
-        out.push("<div class=graphwrap>" + graphSvg(data.chains, effShown("graph", data.chains.length)) + "</div>");
-        out.push(moreBtn("graph", data.chains.length));
+        out.push(
+          GRAPH_FILTER
+            ? '<span class=morewrap tabindex=0 role=button data-desc="Focused on one component. Use “show all nodes” (the eye button on the graph) to clear the focus before paging through every chain."><button class=more disabled><i class="fa-solid fa-chevron-down"></i> Show more</button></span>'
+            : moreBtn("graph", data.chains.length),
+        );
         out.push(
           "<div class=glegend>" +
-            '<i><span class=sw style="background:#e0a13c"></span>Source</i>' +
-            '<i><span class=sw style="background:#9b8cf0"></span>UpstreamSinkUnion</i>' +
-            '<i><span class=sw style="background:#5aa0e0"></span>receive_barrier</i>' +
-            '<i><span class=sw style="background:#e05a5a"></span>storage fetch</i>' +
-            '<i><span class=sw style="background:#3fb8a0"></span>starved sink</i>' +
-            '<i><span class=sw style="background:#6b7280"></span>waiting on input</i>' +
-            '<i style="margin-left:auto"><span class=sw style="width:34px;background:linear-gradient(90deg,#3fb8a0,#e0a13c,#e05a5a)"></span>edge = wait (0s → 10s+)</i></div>',
+            '<i><span class=sw style="background:#e0a13c"></span><i class="fa-solid fa-satellite-dish"></i> Source</i>' +
+            '<i><span class=sw style="background:#9b8cf0"></span><i class="fa-solid fa-code-merge"></i> UpstreamSinkUnion</i>' +
+            '<i><span class=sw style="background:#5aa0e0"></span><i class="fa-solid fa-flag-checkered"></i> receive_barrier</i>' +
+            '<i><span class=sw style="background:#e05a5a"></span><i class="fa-solid fa-database"></i> storage fetch</i>' +
+            '<i><span class=sw style="background:#57b368"></span><i class="fa-solid fa-table-list"></i> metadata fetch</i>' +
+            '<i><span class=sw style="background:#3fb8a0"></span><i class="fa-solid fa-faucet-drip"></i> starved sink</i>' +
+            '<i><span class=sw style="background:#6b7280"></span><i class="fa-solid fa-arrow-right-to-bracket"></i> waiting on input</i>' +
+            '<i style="margin-left:auto"><span class=sw style="width:34px;background:linear-gradient(90deg,#3fb8a0,#e0a13c,#e05a5a)"></span>edge = wait ' +
+            (EDGE_SCALE === "rel"
+              ? `(0s → ${Math.max(0, ...data.chains.flatMap((c) => c.hops.map((h) => h[1]))).toFixed(1)}s, relative)`
+              : "(0s → 10s+)") +
+            "</i></div>",
         );
 
-        out.push("<h2>Worst chain per pipeline (downstream → upstream root)</h2>");
+        out.push(h2("fa-code-branch", "Worst chain per pipeline (downstream → upstream root)"));
         out.push(
           info(
             "For each of the slowest pipelines, its single most-stuck path traced to the root, with the wait at each hop. Read top→bottom: the first line is the slow pipeline; indented lines are successively further upstream. The badge shows what each hop is blocked on, and where the chain bottoms out is the cause — <b>Source/UpstreamSinkUnion</b> = ingestion, <b>wait_pending_fetch_block</b> = storage. When every wait is small and similar, the cluster is healthy and no single path is meaningful — read the roots table above for the overall picture. <b>Click a chain</b> to highlight its nodes in the graph above.",
@@ -2177,7 +1981,7 @@
 
         out.push(moreBtn("chains", data.chains.length));
 
-        out.push("<h2>Epoch-wait distribution</h2>");
+        out.push(h2("fa-chart-column", "Epoch-wait distribution"));
         out.push(
           info(
             "How long actors have been waiting in their current step. At rest this is bounded by the checkpoint interval (~1s), so a healthy cluster sits in the <b>0–1s</b> buckets. Actors in the <b>10s+</b> buckets are genuinely frozen or heavily backpressured. If everything is ≤~1–2s, the cluster was healthy when the dump was taken — to catch an incident, capture again while latency is climbing.",
@@ -2189,7 +1993,7 @@
             "</tbody></table>",
         );
 
-        out.push("<h2>Pipelines by max epoch-wait</h2>");
+        out.push(h2("fa-timeline", "Pipelines by max epoch-wait"));
         out.push(
           info(
             "Each streaming job (materialized view, index, or sink), ranked by its slowest actor. A high <b>max</b> with a low <b>median</b> means one straggler actor — data skew or a hot key; a high <b>median</b> means the whole job is slow. <b>actors</b> is that job's parallelism.",
@@ -2208,7 +2012,7 @@
           ),
         );
 
-        out.push("<h2>Slowest individual actors</h2>");
+        out.push(h2("fa-gauge-high", "Slowest individual actors"));
         out.push(
           info(
             "The individual actors with the longest epoch wait and what each is blocked on. Useful for telling a single hot actor (data skew) apart from a whole pipeline being slow — if one actor dominates while its siblings are fast, you have skew on that operator's key.",
@@ -2234,7 +2038,7 @@
 
         if (data.jvm) {
           const j = data.jvm;
-          out.push("<h2>JVM connector-node thread dump</h2>");
+          out.push(h2("fa-plug", "JVM connector-node thread dump"));
           out.push(
             info(
               "The embedded connector node runs CDC sources and JDBC/other sinks on the JVM. <b>RUNNABLE</b> threads sitting in socket reads (e.g. MongoDB <code>SocketStream.read</code>) mean it is actively pulling/pushing — a busy connector here can itself be the ingestion limiter. <b>BLOCKED</b> threads indicate lock contention. The thread-group table shows which connectors are active and how many threads each uses.",
@@ -2256,7 +2060,7 @@
             ),
           );
           if (j.runnable.length) {
-            out.push("<h2>RUNNABLE threads — representative frame</h2>");
+            out.push(h2("fa-bolt", "RUNNABLE threads — representative frame"));
             out.push(
               tableHTML(
                 "jvmRun",
@@ -2625,7 +2429,166 @@
             } catch (_) {}
           }
         }
-        wireGraphDrag();
+        wireGraphInteract();
+        wireGraphControls();
+      }
+
+      // Dim graph nodes that don't match the current search query; thicken the ones that do. Applied
+      // directly to the DOM (no re-render) so typing stays responsive; the query persists across redraws.
+      function applySearch() {
+        const wrap = $("body").querySelector(".graphwrap");
+        if (!wrap) return;
+        const q = SEARCH_Q.trim().toLowerCase();
+        const isHit = (name) => !!q && (name || "").toLowerCase().includes(q);
+        wrap.querySelectorAll(".gnode").forEach((g) => {
+          const hit = isHit(g.dataset.node);
+          g.classList.toggle("searchdim", !!q && !hit);
+          g.classList.toggle("searchhit", hit);
+        });
+        // dim any edge unless BOTH its endpoints match (so only the searched nodes' own links stay bright)
+        wrap.querySelectorAll(".gedge").forEach((e) => {
+          const on = isHit(e.dataset.from) && isHit(e.dataset.to);
+          e.classList.toggle("searchdim", !!q && !on);
+        });
+      }
+      // Spotlight the clicked node's influence (GRAPH_HIGHLIGHT) via CSS classes on the existing DOM — no
+      // re-render, so clicking a node never tears down the graph (keeps a fullscreened graph in fullscreen).
+      function applyHighlight() {
+        const wrap = $("body").querySelector(".graphwrap");
+        if (!wrap) return;
+        const H = GRAPH_HIGHLIGHT;
+        wrap.querySelectorAll(".gnode").forEach((g) => {
+          const on = !!H && H.has(g.dataset.node);
+          g.classList.toggle("hldim", !!H && !on);
+          g.classList.toggle("hlon", on);
+        });
+        wrap.querySelectorAll(".gedge").forEach((e) => {
+          const on = !!H && H.has(e.dataset.from) && H.has(e.dataset.to);
+          e.classList.toggle("hldim", !!H && !on);
+        });
+      }
+      // Wire the graph control bar: zoom (scales the svg), full screen, and the search box.
+      function wireGraphControls() {
+        const wrap = $("body").querySelector(".graphwrap");
+        if (!wrap) return;
+        const svg = wrap.querySelector(".gscroll svg");
+        const applyZoom = () => {
+          if (!svg) return;
+          const vb = (svg.getAttribute("viewBox") || "0 0 0 0").split(/\s+/).map(Number);
+          svg.setAttribute("width", vb[2] * GRAPH_ZOOM);
+          svg.setAttribute("height", vb[3] * GRAPH_ZOOM);
+        };
+        applyZoom();
+        applySearch(); // reapply the persisted query after a re-render
+        applyHighlight(); // reapply the current node highlight after a re-render
+        const byId = (id) => wrap.querySelector("#" + id);
+        const setZoom = (z) => {
+          GRAPH_ZOOM = Math.max(0.2, Math.min(5, z));
+          applyZoom();
+        };
+        const zin = byId("gc-zin"),
+          zout = byId("gc-zout"),
+          zreset = byId("gc-zreset"),
+          fs = byId("gc-fs"),
+          sbtn = byId("gc-searchbtn"),
+          showall = byId("gc-showall"),
+          scale = byId("gc-scale"),
+          inp = byId("gc-input");
+        if (zin) zin.onclick = () => setZoom(GRAPH_ZOOM * 1.2);
+        if (zout) zout.onclick = () => setZoom(GRAPH_ZOOM / 1.2);
+        if (zreset) zreset.onclick = () => setZoom(1);
+        if (scale)
+          scale.onclick = () => {
+            EDGE_SCALE = EDGE_SCALE === "rel" ? "abs" : "rel"; // toggle edge colour/width scale, then re-render
+            if (document.fullscreenElement) redrawGraphOnly();
+            else draw();
+          };
+        if (showall)
+          showall.onclick = () => {
+            GRAPH_FILTER = null;
+            GRAPH_HIGHLIGHT = null; // clear the focus; in fullscreen redraw only the graph so we stay in it
+            if (document.fullscreenElement) redrawGraphOnly();
+            else draw();
+          };
+        if (fs)
+          fs.onclick = () => {
+            if (document.fullscreenElement) document.exitFullscreen();
+            else if (wrap.requestFullscreen) wrap.requestFullscreen();
+          };
+        if (sbtn)
+          sbtn.onclick = () => {
+            if (SEARCH_OPEN) {
+              SEARCH_OPEN = false;
+              SEARCH_Q = ""; // clicking the (x) clears + collapses
+            } else {
+              SEARCH_OPEN = true;
+            }
+            draw();
+          };
+        if (inp) {
+          inp.focus();
+          try {
+            inp.setSelectionRange(inp.value.length, inp.value.length);
+          } catch (_) {}
+          inp.oninput = () => {
+            SEARCH_Q = inp.value;
+            applySearch();
+          };
+          inp.onkeydown = (e) => {
+            if (e.key === "Escape") {
+              SEARCH_OPEN = false;
+              SEARCH_Q = "";
+              draw();
+            }
+          };
+        }
+        // Click-and-drag on empty graph space pans (scrolls) the view. Property handlers (not
+        // addEventListener) so re-wiring the same .gscroll after a graph-only redraw can't stack listeners.
+        const scroll = wrap.querySelector(".gscroll");
+        if (scroll) {
+          let pan = null;
+          scroll.onpointerdown = (e) => {
+            if (e.button !== 0 || (e.target.closest && e.target.closest(".gnode"))) return; // node clicks pass through
+            pan = { x: e.clientX, y: e.clientY, sl: scroll.scrollLeft, st: scroll.scrollTop, moved: false, id: e.pointerId };
+          };
+          scroll.onpointermove = (e) => {
+            if (!pan) return;
+            const dx = e.clientX - pan.x,
+              dy = e.clientY - pan.y;
+            if (!pan.moved) {
+              if (Math.hypot(dx, dy) < 4) return; // ignore jitter so a plain click still registers
+              pan.moved = true;
+              scroll.classList.add("panning");
+              try {
+                scroll.setPointerCapture(pan.id);
+              } catch (_) {}
+            }
+            scroll.scrollLeft = pan.sl - dx;
+            scroll.scrollTop = pan.st - dy;
+          };
+          const endPan = () => {
+            if (pan && pan.moved) SUPPRESS_CLICK = true; // swallow the click that ends the drag
+            pan = null;
+            scroll.classList.remove("panning");
+          };
+          scroll.onpointerup = endPan;
+          scroll.onpointercancel = endPan;
+        }
+      }
+      // Re-render ONLY the graph SVG in place (keeps .graphwrap/.gscroll — so a fullscreened graph stays
+      // fullscreen). Used for filter changes that alter the node set but shouldn't rebuild the whole report.
+      function redrawGraphOnly() {
+        const wrap = $("body").querySelector(".graphwrap");
+        if (!wrap || !STATE || !STATE._data) return draw();
+        // Rebuild the control bar + graph inside the persistent .graphwrap (so the control bar reflects
+        // filter changes), without touching the rest of the report — keeps a fullscreened graph fullscreen.
+        wrap.innerHTML =
+          graphControls() +
+          "<div class=gscroll>" +
+          graphSvg(STATE._data.chains, effShown("graph", STATE._data.chains.length)) +
+          "</div>";
+        wireGraphInteract();
+        wireGraphControls();
       }
 
       // The connected component containing `node`, computed from the full chain set (not the current view).
@@ -2674,131 +2637,54 @@
       function focusSubtree(node) {
         GRAPH_FILTER = componentOf(node);
         GRAPH_HIGHLIGHT = null; // a plain focus has no in-component highlight
-        LAYOUT = "planar";
-        CUSTOM_POS = {};
-        draw();
+        // In fullscreen, re-render only the graph so we don't tear down the fullscreened element; otherwise
+        // a full draw so the "show all nodes" bar (rendered outside the graph) appears.
+        if (document.fullscreenElement) redrawGraphOnly();
+        else draw();
       }
 
-      // click-and-drag to reposition graph nodes; connected edges follow.
-      function wireGraphDrag() {
+      // Graph interaction (no dragging): click a node to highlight its influence, double-click to focus its
+      // component, click empty space to clear. A short delay lets a double-click cancel the single-click.
+      function wireGraphInteract() {
         const svg = $("body").querySelector(".graphwrap svg");
         if (!svg) return;
-        const nodeEls = {};
-        svg.querySelectorAll(".gnode").forEach((g) => (nodeEls[g.dataset.node] = g));
-        const edges = [...svg.querySelectorAll(".gedge")];
-        const toSvg = (e) => {
-          const m = svg.getScreenCTM();
-          const p = svg.createSVGPoint();
-          p.x = e.clientX;
-          p.y = e.clientY;
-          return m ? p.matrixTransform(m.inverse()) : { x: e.clientX, y: e.clientY };
-        };
-        // Rebuild the grid occupancy from the live node positions (experimental router only), so the
-        // dragged node stops being an obstacle at its old spot and becomes one at its new spot.
-        const rebuildGrid = () => {
-          if (!GRAPH_LAYOUT) return;
-          const rects = [];
-          svg.querySelectorAll(".gnode").forEach((g) => {
-            const x = +g.dataset.x,
-              y = +g.dataset.y;
-            rects.push([x, y, x + GNODE_W, y + GNODE_H]);
-          });
-          GRAPH_LAYOUT.grid = buildGrid(rects, GRAPH_LAYOUT.W, GRAPH_LAYOUT.H);
-        };
-        // Dragging recomputes the edge with the SAME router the render uses, from the live endpoints — so
-        // the waypoints reflow around the nodes as you drag, and dropping causes no jump.
-        // A drag always routes the moved node's edges position-aware (grid A*) — in BOTH modes — because
-        // the column router can't dodge a node dragged out of its rank. Same call the re-render uses.
-        const updEdge = (ed) => {
-          const a = nodeEls[ed.dataset.from],
-            b = nodeEls[ed.dataset.to];
-          if (!a || !b || !GRAPH_LAYOUT || !GRAPH_LAYOUT.grid) return;
-          const L = GRAPH_LAYOUT;
-          const ax = +a.dataset.x,
-            ay = +a.dataset.y,
-            bx = +b.dataset.x,
-            by = +b.dataset.y;
-          const sRect = [ax, ay, ax + GNODE_W, ay + GNODE_H],
-            tRect = [bx, by, bx + GNODE_W, by + GNODE_H];
-          const dir = bx + GNODE_W / 2 >= ax + GNODE_W / 2 ? 1 : -1;
-          const gs = dir > 0 ? [ax + GNODE_W, ay + GNODE_H / 2] : [ax, ay + GNODE_H / 2];
-          const gt = dir > 0 ? [bx, by + GNODE_H / 2] : [bx + GNODE_W, by + GNODE_H / 2];
-          ed.setAttribute("d", smoothPath(gridRoute(gs, gt, sRect, tRect, L.grid), dir));
-        };
-        // focus a node's connected subtree (component) via BFS, then re-layout
-        // We can't rely on the native "dblclick" event: pointerdown calls preventDefault + setPointerCapture
-        // for dragging, which suppresses the browser's synthesized click/dblclick. So detect a double-click
-        // manually — two taps on the same node, neither of which moved.
-        let drag = null;
-        svg.addEventListener("pointerdown", (e) => {
+        let clickTimer = null;
+        svg.addEventListener("click", (e) => {
+          if (SUPPRESS_CLICK) {
+            SUPPRESS_CLICK = false;
+            return;
+          } // this click ended a pan drag — ignore it
+          clearTimeout(clickTimer);
           const g = e.target.closest && e.target.closest(".gnode");
           if (!g) {
             if (GRAPH_HIGHLIGHT) {
-              GRAPH_HIGHLIGHT = null; // press on empty background -> clear highlight
-              draw();
+              GRAPH_HIGHLIGHT = null; // background click clears the highlight
+              applyHighlight(); // via CSS classes only — no re-render, so fullscreen survives
             }
             return;
           }
-          e.preventDefault();
-          const s = toSvg(e);
-          drag = { g, sx: s.x, sy: s.y, ox: +g.dataset.x, oy: +g.dataset.y, id: e.pointerId };
-          try {
-            svg.setPointerCapture(e.pointerId);
-          } catch (_) {}
-          g.parentNode.appendChild(g); // bring dragged node to front
+          const node = g.dataset.node;
+          clickTimer = setTimeout(() => {
+            GRAPH_HIGHLIGHT = influenceOf(node); // ancestors + descendants only
+            applyHighlight(); // no re-render (keeps fullscreen alive)
+          }, 200);
         });
-        svg.addEventListener("pointermove", (e) => {
-          if (!drag) return;
-          const s = toSvg(e);
-          if (!drag.moved) {
-            if (Math.hypot(s.x - drag.sx, s.y - drag.sy) < 4) return; // ignore click jitter (don't start a drag)
-            drag.moved = true; // real movement -> this node gets a manual position; the rest of the layout stays
-          }
-          const nx = drag.ox + (s.x - drag.sx),
-            ny = drag.oy + (s.y - drag.sy);
-          drag.g.dataset.x = nx;
-          drag.g.dataset.y = ny;
-          drag.g.setAttribute("transform", `translate(${nx},${ny})`);
-          CUSTOM_POS[drag.g.dataset.node] = [nx, ny];
-          const nm = drag.g.dataset.node;
-          rebuildGrid(); // refresh obstacle grid from live positions before re-routing this node's edges
-          for (const ed of edges) if (ed.dataset.from === nm || ed.dataset.to === nm) updEdge(ed);
+        svg.addEventListener("dblclick", (e) => {
+          clearTimeout(clickTimer);
+          const g = e.target.closest && e.target.closest(".gnode");
+          if (g) focusSubtree(g.dataset.node); // filter to this node's connected component
         });
-        const finish = (isUp) => {
-          if (!drag) return;
-          try {
-            svg.releasePointerCapture(drag.id);
-          } catch (_) {}
-          const moved = drag.moved,
-            node = drag.g.dataset.node;
-          drag = null;
-          if (moved) {
-            draw();
-            return;
-          }
-          if (!isUp) return; // cancelled, not a tap
-          const now = Date.now(); // no movement => a tap; two taps on the same node = double-click
-          if (LAST_TAP.node === node && now - LAST_TAP.t < 350) {
-            LAST_TAP = { node: null, t: 0 };
-            focusSubtree(node); // double-click -> filter to this node's component/subtree
-          } else {
-            LAST_TAP = { node, t: now };
-            GRAPH_HIGHLIGHT = influenceOf(node); // single-click -> highlight its ancestors + descendants only
-            draw();
-          }
-        };
-        svg.addEventListener("pointerup", () => finish(true));
-        svg.addEventListener("pointercancel", () => finish(false));
       }
       function recompute() {
         if (!STATE) return;
         STATE._data = analyse(STATE.actors, STATE.jvm, 15);
         TABLE_STATE = {};
-        LAYOUT = "planar";
-        CUSTOM_POS = {};
         GRAPH_FILTER = null;
-        GRAPH_HIGHLIGHT = null;
-        LAST_TAP = { node: null, t: 0 }; // reset sort/filter/layout/selection for the new file
+        GRAPH_HIGHLIGHT = null; // reset sort/filter/selection for the new file
+        GRAPH_ZOOM = 1;
+        SEARCH_OPEN = false;
+        SEARCH_Q = "";
+        EDGE_SCALE = "abs";
         $("fn").textContent = STATE.source;
         $("summary").textContent =
           `${nf(STATE.actors.length)} actors · ${nf(STATE.jvm.length)} JVM threads` +
@@ -2974,22 +2860,14 @@
         if (el) hideRootPop();
       });
 
-      // experimental grid-routing toggle above the graph
-      $("body").addEventListener("change", (e) => {
-        if (e.target && e.target.id === "gridtoggle") {
-          GRID_ROUTING = e.target.checked;
-          draw();
-        }
+      // Leaving fullscreen: re-sync the full report (so e.g. the graph "show more" / focus state reflects
+      // any filter applied while fullscreen). Entering fullscreen needs nothing.
+      document.addEventListener("fullscreenchange", () => {
+        if (!document.fullscreenElement && STATE && STATE._data) draw();
       });
       // report controls
       $("body").addEventListener("click", (e) => {
         if (!e.target.closest) return;
-        if (e.target.id === "gfilterclear") {
-          GRAPH_FILTER = null;
-          GRAPH_HIGHLIGHT = null;
-          draw();
-          return;
-        }
         const chain = e.target.closest(".chain.clickable");
         if (chain && chain.dataset.pipeline) {
           const chains = (STATE._data && STATE._data.chains) || [];
@@ -2997,8 +2875,6 @@
           if (ch) {
             GRAPH_FILTER = componentOf(ch.hops[0][0]); // first: restrict to this chain's component
             GRAPH_HIGHLIGHT = new Set(ch.hops.map((h) => h[0])); // then: spotlight the exact chain nodes
-            LAYOUT = "planar";
-            CUSTOM_POS = {};
             draw();
             $("body").querySelector(".graphwrap")?.scrollIntoView({ behavior: "smooth", block: "start" }); // scroll up
           }
@@ -3010,11 +2886,9 @@
             cfg = SECTION_CFG[sec] || { step: 10 };
           SHOWN[sec] = (SHOWN[sec] || 0) + cfg.step;
           if (sec === "graph") {
-            LAYOUT = "planar";
-            CUSTOM_POS = {};
             GRAPH_FILTER = null;
             GRAPH_HIGHLIGHT = null;
-          } // node set changed -> re-layout cleanly (fixes custom overlap)
+          } // node set changed -> reset graph selection
           draw();
           return;
         }
